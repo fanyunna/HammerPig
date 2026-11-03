@@ -1,0 +1,78 @@
+{
+  "start_count": 24,
+  "income_per_game_day": 135,
+  "first_due_min_days": 4,
+  "first_due_max_days": 16,
+  "calendar_late_fee": 12,
+  "pay_stamina_bonus": 18,
+  "overdue_label": "已逾期",
+  "unpaid_stamp": "未付",
+
+  "effects": {
+    "blackout": {
+      "hint": "未缴费：桌面照明受限",
+      "darkness_alpha": 0.38,
+      "payment_bonus_duration": 8.0,
+      "cooldown_multiplier": 0.9
+    },
+    "interest": {
+      "hint": "未还款：每次考核失败追加利息",
+      "interest_per_failed_challenge": 10
+    },
+    "collection": {
+      "hint": "未交租：房东会定期上门催收",
+      "progress_threshold": 100,
+      "max_triggers_per_run": 3,
+      "cooldown_seconds": 45
+    }
+  },
+
+  "synergies": [
+    {
+      "id": "dark_knock",
+      "name": "断电催收",
+      "requires": ["blackout", "collection"],
+      "hint": "敲门震动增强；还清全部电费或房租可解除。"
+    },
+    {
+      "id": "health_fatigue",
+      "name": "疲劳过载",
+      "requires": ["health", "gym"],
+      "hint": "体力恢复变慢；还清全部医保或健身账单可解除。",
+      "stamina_regen_penalty": 0.12
+    },
+    {
+      "id": "rent_fine",
+      "name": "租罚夹击",
+      "requires": ["collection", "fine"],
+      "hint": "催收进度更快；还清全部房租或罚款可解除。",
+      "threshold_multiplier": 0.75
+    },
+    {
+      "id": "credit_broadband",
+      "name": "利息回路",
+      "requires": ["interest", "broadband"],
+      "hint": "失败利息 +¥5/张；还清全部信用卡或网费可解除。",
+      "interest_surcharge": 5
+    }
+  ],
+
+  "catalog": [
+    { "name": "水费", "amount": 38 },
+    { "name": "电费", "amount": 126, "id": "electricity", "effect_id": "blackout" },
+    { "name": "燃气费", "amount": 64 },
+    { "name": "宽带费", "amount": 89, "id": "broadband", "effect_id": "broadband" },
+    { "name": "手机话费", "amount": 52 },
+    { "name": "物业费", "amount": 210 },
+    { "name": "视频会员", "amount": 28 },
+    { "name": "宠物疫苗", "amount": 96 },
+    { "name": "医保自付", "amount": 175, "id": "health", "effect_id": "health" },
+    { "name": "交通罚款", "amount": 150, "id": "fine", "effect_id": "fine" },
+    { "name": "信用卡还款", "amount": 320, "id": "credit_card", "effect_id": "interest" },
+    { "name": "房租", "amount": 560, "id": "rent", "effect_id": "collection" },
+    { "name": "车险分期", "amount": 240 },
+    { "name": "助学贷款", "amount": 460 },
+    { "name": "健身房年卡", "amount": 128, "id": "gym", "effect_id": "gym" },
+    { "name": "牙科账单", "amount": 380 }
+  ]
+}
