@@ -25,6 +25,16 @@ const PIG3D_SIZE := 138.0 # 3D 猪纹理的绘制边长（基准；实际尺寸�
 const MAX_PARTICLES := 70 # 粒子上限：狂热时一秒连碎好几只，别让金币堆到掉帧
 const PIG3D_OFFSET := Vector2(0, -10) # 纹理中心相对猪身体中心的偏移
 const DESK_RECT := Rect2(110, 260, 1060, 396) # 桌面外框的屏幕矩形（3D 桌板按它反算尺寸）
+const ART_DIR := "res://assets/art/" # AI 生成的西部风素材目录（运行时直接读 PNG，不依赖 import）
+const PIG_TEXTURE_FILES := { # 猪种 id → 素材文件名（不含扩展名）；没列到/没生成的种类回退 3D 图元
+	"piggy": "pig_normal",
+	"stripe": "pig_stripe",
+	"mini": "pig_mini",
+	"gold": "pig_gold",
+	"debt": "pig_debt",
+	"glass": "pig_glass",
+	"fat": "pig_fat",
+}
 var settings: Dictionary
 var story: Dictionary = {} # 背景设定（data/story.json）；读不到就用 {} 走内置兜底文案
 var bill_data: Dictionary = {} # 账单目录（data/bills.json）
@@ -108,6 +118,9 @@ var stamina_flash := 0.0
 var end_reason := "" # "target" / "exhausted"
 var font := SystemFont.new()
 
+var pig_tex: Dictionary = {} # 猪贴图：id → Texture2D（缺的键 = 素材还没生成，静默回退原路径）
+var hammer_tex: Texture2D = null # 握锤的手贴图；null = 用回 3D 锤
+var bg_tex: Texture2D = null # 西部酒馆背景；null = 用回纯色底
 var pig3d: Array[Pig3D] = [] # 每只猪一个 SubViewport（3D）
 var desk3d: Desk3D = null # 3D 木桌背景（全屏 SubViewport）
 var use_3d := false # 由 balance.json 的 pig_3d 控制，headless 下强制关闭
@@ -126,6 +139,7 @@ func _ready() -> void:
 	bills_fx.setup(bill_data)
 	bills_fx.collection_triggered.connect(_on_collection_triggered)
 	vignette_tex = _make_vignette() # 停电暗角用；headless 下也只是生成一张空图，不会崩
+	_load_art_textures() # 美术贴图：读不到的键不进字典，绘制处自动回退 3D 图元 / 2D 自绘
 	# 开场序幕：headless 下关掉，否则自动化测试第一下点击会被序幕吃掉
 	intro_open = bool(story.get("intro_enabled", true)) and not DisplayServer.get_name().contains("headless")
 	sync_cursor() # 开场是序幕，这里应该是系统箭头：点「敲开第一只」要看得见自己在点什么
@@ -145,6 +159,28 @@ func _ready() -> void:
 		hammer3d = Hammer3DScript.new()
 		add_child(hammer3d)
 	reset_game()
+
+
+## 读一张美术 PNG 成纹理。走 Image.load_from_file 而不是 load()：仓库里没有 .import 文件也能用；
+## 文件不存在 / 解码失败都返回 null（先 file_exists 探路，不往控制台报错），绘制处静默回退。
+func _load_png_texture(path: String) -> Texture2D:
+	if not FileAccess.file_exists(path):
+		return null
+	var img := Image.load_from_file(path)
+	if img == null or img.is_empty():
+		return null
+	return ImageTexture.create_from_image(img)
+
+
+## 美术贴图总入口：猪按种类各一张，外加锤子与酒馆背景
+func _load_art_textures() -> void:
+	for id in PIG_TEXTURE_FILES:
+		var tex := _load_png_texture(ART_DIR + String(PIG_TEXTURE_FILES[id]) + ".png")
+		if tex != null:
+			pig_tex[id] = tex
+	hammer_tex = _load_png_texture(ART_DIR + "hammer_hand.png")
+	bg_tex = _load_png_texture(ART_DIR + "bg_western.png")
+
 
 ## 开局/重开：从目录里随机抽 start_count 张不重复的账单，按金额升序（小额在上，先还得起）
 func roll_bills() -> void:
@@ -845,6 +881,8 @@ func reset_game() -> void:
 					PIG_BOUNDS.position.y + (float(row) + 0.5) * PIG_BOUNDS.size.y / float(rows)),
 				"type": t, "hp": hp, "max_hp": hp, "respawn": 0.0,
 				"flash": 0.0, "hop": 0.0, "seed": float(row * 4 + col),
+				"hop_phase": randf() * TAU, # 弹跳相位随机起步，不然满桌猪齐刷刷同起同落
+				"left": true, # 朝向：素材朝左画，往右走时镜像（见 draw_pig_sprite）
 				"velocity": random_pig_velocity(t)
 			})
 			note_pig_type(t, true) # 开局这批只预警会亏钱的那种
@@ -916,6 +954,10 @@ func _process(delta: float) -> void:
 			pig.hop = maxf(0.0, pig.hop - delta)
 			if pig.hp > 0:
 				pig.position += pig.velocity * delta
+				# 走路弹跳：相位随位移推进（每 26px 一步、蹦一下），速度越快蹦得越快
+				pig.hop_phase = fmod(float(pig.get("hop_phase", 0.0)) + pig.velocity.length() * delta / 26.0 * PI, TAU)
+				if absf(pig.velocity.x) > 4.0: # 近乎竖直走时别乱翻朝向
+					pig.left = pig.velocity.x < 0.0
 				if pig.position.x < PIG_BOUNDS.position.x or pig.position.x > PIG_BOUNDS.end.x:
 					pig.velocity.x = -pig.velocity.x
 					pig.position.x = clampf(pig.position.x, PIG_BOUNDS.position.x, PIG_BOUNDS.end.x)
@@ -1236,6 +1278,8 @@ func double_pig_population() -> void:
 			"position": Vector2.ZERO,
 			"type": t, "hp": hp, "max_hp": hp, "respawn": 0.0,
 			"flash": 0.0, "hop": 0.0, "seed": float(doubled_count + i),
+			"hop_phase": randf() * TAU,
+			"left": true,
 			"velocity": random_pig_velocity(t)
 		})
 		note_pig_type(t)
@@ -1789,8 +1833,12 @@ func draw_intro() -> void:
 
 
 func _draw() -> void:
-	draw_rect(Rect2(0, 0, 1280, 800), Color("#241610")) # 西部酒馆：深棕底色
-	draw_circle(Vector2(1050, 180), 380, Color("#312012"))
+	if bg_tex != null: # 西部酒馆全景：拉伸铺满，再压一层暗保持 HUD 可读
+		draw_texture_rect(bg_tex, Rect2(0, 0, 1280, 800), false)
+		draw_rect(Rect2(0, 0, 1280, 800), Color(0.0, 0.0, 0.0, 0.35))
+	else:
+		draw_rect(Rect2(0, 0, 1280, 800), Color("#241610")) # 背景图没读到时用回纯色底
+		draw_circle(Vector2(1050, 180), 380, Color("#312012"))
 	draw_watchers() # 桌后那排黑影：画在桌子之前，才像"站在你身后看着"
 	draw_desk() # 桌面先铺，后面的 HUD / 猪 / 卡片都在它上面
 	if intro_open:
@@ -1897,6 +1945,11 @@ func _draw() -> void:
 	draw_blackout() # 电费未缴时覆盖全屏
 
 func draw_pig(pig: Dictionary, index: int) -> void:
+	var t: Dictionary = pig.get("type", {})
+	var tex: Texture2D = pig_tex.get(String(t.get("id", "piggy")))
+	if tex != null: # 有贴图走贴图：AI 素材替掉图元 3D 模型
+		draw_pig_sprite(pig, tex)
+		return
 	if use_3d and index < pig3d.size():
 		var s := pig_size() / 190.0 # 阴影 / 裂纹 / 抖动幅度都按绘制尺寸等比缩放
 		var pos: Vector2 = pig.position + PIG3D_OFFSET
@@ -1918,6 +1971,48 @@ func draw_pig(pig: Dictionary, index: int) -> void:
 			draw_set_transform(Vector2.ZERO)
 		return
 	draw_pig_flat(pig)
+
+
+## 贴图猪（AI 西部素材）：移动时按 hop_phase 正弦弹跳 —— 视觉上移 = -abs(sin) × 跳高，
+## 落地瞬间（sin 过零点附近）短暂挤压（0.9 / 1.08），空中轻微拉伸（1.05）；
+## 被敲中的大跳（hop > 0）、受击抖动、死亡淡出都沿用原参数。
+func draw_pig_sprite(pig: Dictionary, tex: Texture2D) -> void:
+	var t: Dictionary = pig.get("type", {})
+	var side := pig_size() * pig_scale(t) # 贴图最长边的绘制长度：跟整体尺寸与猪种体型走
+	var k := side / PIG3D_SIZE # 阴影 / 裂纹 / 抖动幅度按绘制尺寸等比缩放（沿用原 3D 路径）
+	var pos: Vector2 = pig.position + PIG3D_OFFSET
+	if pig.flash > 0.0:
+		pos.x += sin(pig.flash * 90) * 8 * k
+	var squash := Vector2.ONE
+	if pig.hp > 0:
+		var spd: float = pig.velocity.length()
+		var bounce := absf(sin(float(pig.get("hop_phase", 0.0))))
+		var hop_h := lerpf(14.0, 20.0, clampf(spd / 160.0, 0.0, 1.0)) # 快猪跳高一点
+		pos.y -= bounce * hop_h * k
+		if bounce < 0.25: # 落地瞬间：短暂挤压
+			squash = Vector2(1.08, 0.9)
+		else: # 空中：轻微拉伸
+			squash = Vector2(1.0, 1.0 + 0.05 * bounce)
+	if pig.hop > 0.0:
+		pos.y -= sin(pig.hop / 0.24 * PI) * 26 * k # 受击向上跳起（大跳，沿用原参数）
+	draw_set_transform(pig.position + Vector2(0, 43 * k), 0, Vector2(1, 0.25))
+	draw_circle(Vector2.ZERO, 62 * k, Color(0.12, 0.1, 0.08, 0.27)) # 桌面投影：画在脚下，不跟着跳
+	draw_set_transform(Vector2.ZERO)
+	var ts := tex.get_size()
+	var fit := side / maxf(ts.x, ts.y) # 最长边对齐 side，等比缩放，不拉坏素材比例
+	var flip := 1.0 if bool(pig.get("left", true)) else -1.0 # 素材朝左画；往右走时镜像
+	pos.y += (1.0 - squash.y) * side * 0.5 # 以脚为轴挤压：中心下移，脚底保持贴地
+	draw_set_transform(pos, 0.0, Vector2(flip * squash.x * fit, squash.y * fit))
+	draw_texture(tex, -ts / 2.0)
+	draw_set_transform(Vector2.ZERO)
+	var dmg: int = int(pig.get("max_hp", 2)) - int(pig.hp) # 挨了几锤就画几道裂：金猪能裂两道
+	if dmg >= 1:
+		draw_set_transform(pos, 0.0, Vector2(flip * k, k))
+		draw_polyline(PackedVector2Array([Vector2(-26, -22), Vector2(-13, -9), Vector2(-23, 5), Vector2(-7, 23)]), Color("#985f69"), 3, true)
+		if dmg >= 2:
+			draw_polyline(PackedVector2Array([Vector2(20, -30), Vector2(8, -14), Vector2(22, -2), Vector2(11, 22)]), Color("#985f69"), 3, true)
+		draw_set_transform(Vector2.ZERO)
+
 
 ## 2D 回退版（headless / pig_3d: false）：形状照旧，但颜色与大小跟着种类走
 func draw_pig_flat(pig: Dictionary) -> void:
@@ -2033,6 +2128,13 @@ func draw_hammer() -> void:
 	if SHOW_HAND:
 		# 握点取柄的下段（不是末端）：柄尾要露在拳头外面，"握着"才看得懂
 		draw_shadow_arm(pivot + Vector2(19, 74).rotated(angle))
+	if hammer_tex != null: # 贴图锤：皮手套握木柄锤，跟随鼠标，挥锤下压+旋转沿用 swing 动画
+		var hs := hammer_tex.get_size()
+		var hfit := 250.0 / maxf(hs.x, hs.y) # 最长边约 250：比原 3D 锤略大，握锤的手也进了画面
+		draw_set_transform(pivot, angle, Vector2(k * hfit, k * hfit))
+		draw_texture(hammer_tex, -hs / 2.0)
+		draw_set_transform(Vector2.ZERO)
+		return
 	if hammer3d != null:
 		draw_set_transform(pivot, angle, Vector2(k, k))
 		draw_texture_rect(hammer3d.get_texture(), Rect2(-104, -104, 208, 208), false)
