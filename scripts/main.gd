@@ -525,14 +525,14 @@ func clamp_bill_page() -> void:
 
 
 func draw_ledger() -> void:
-	draw_rect(Rect2(0, 0, 1280, 800), Color(0.02, 0.04, 0.04, 0.76))
+	draw_rect(Rect2(0, 0, 1280, 800), Color(0.055, 0.033, 0.02, 0.76))
 	panel(Rect2(LEDGER_RECT.position + Vector2(6, 8), LEDGER_RECT.size), Color(0.02, 0.05, 0.05, 0.55), 20) # 桌子上的投影
-	panel(LEDGER_RECT, Color("#25312e"), 18)
-	panel(Rect2(LEDGER_RECT.position + Vector2(0, 0), Vector2(LEDGER_RECT.size.x, 62)), Color("#1b2422"), 18) # 账本封面条
+	panel(LEDGER_RECT, Color("#2b1c11"), 18)
+	panel(Rect2(LEDGER_RECT.position + Vector2(0, 0), Vector2(LEDGER_RECT.size.x, 62)), Color("#1f130c"), 18) # 账本封面条
 	text_at("摊开的账单", LEDGER_RECT.position + Vector2(28, 40), 24, Color("#efbc72"))
 	text_at(str(bills.size()) + " 张没付 · 合计 ¥" + str(bills_total()), LEDGER_RECT.position + Vector2(200, 40), 18, Color("#e7a6a4"))
 	text_at("游戏日期 " + format_game_date(game_day), LEDGER_RECT.position + Vector2(LEDGER_RECT.size.x - 440, 40), 18, Color("#efbc72"))
-	text_at("第 " + str(bill_page + 1) + " / " + str(ledger_page_count()) + " 页", LEDGER_RECT.position + Vector2(LEDGER_RECT.size.x - 190, 40), 18, Color("#a4b6af"))
+	text_at("第 " + str(bill_page + 1) + " / " + str(ledger_page_count()) + " 页", LEDGER_RECT.position + Vector2(LEDGER_RECT.size.x - 190, 40), 18, Color("#c9b08a"))
 	for i in range(LEDGER_PER_PAGE):
 		var idx := bill_page * LEDGER_PER_PAGE + i
 		if idx >= bills.size():
@@ -548,7 +548,7 @@ func draw_ledger() -> void:
 		for rule in active_rules:
 			combo_text.append(String(rule.get("name", "账单联动")))
 		text_center("激活联动：" + "、".join(combo_text), 640, LEDGER_RECT.end.y - 26, 15, Color("#ffb86b"))
-	text_center("点账单查看/还款 · 每 ¥" + str(int(bill_data.get("income_per_game_day", 100))) + " 收入前进一天 · ←/→ 翻页 · B 收起", 640, LEDGER_RECT.end.y - 8, 14, Color("#a4b6af"))
+	text_center("点账单查看/还款 · 每 ¥" + str(int(bill_data.get("income_per_game_day", 100))) + " 收入前进一天 · ←/→ 翻页 · B 收起", 640, LEDGER_RECT.end.y - 8, 14, Color("#c9b08a"))
 
 
 ## 单张账单放大版：一张完整的催缴通知单（这才是「点开」看到的）
@@ -559,7 +559,7 @@ func draw_bill_detail() -> void:
 	var principal := int(b.amount)
 	var amount := bill_pay_amount(bill_detail)
 	var can_pay: bool = phase == "playing" and score >= amount
-	draw_rect(Rect2(0, 0, 1280, 800), Color(0.02, 0.04, 0.04, 0.82))
+	draw_rect(Rect2(0, 0, 1280, 800), Color(0.055, 0.033, 0.02, 0.82))
 	draw_set_transform(DETAIL_RECT.get_center(), -0.012, Vector2.ONE)
 	var half := DETAIL_RECT.size / 2.0
 	var rect := Rect2(-half, DETAIL_RECT.size)
@@ -1114,6 +1114,8 @@ func strike(point: Vector2) -> void:
 				stamina = minf(float(settings.get("stamina_max", 100)), stamina + 8.0) # 轻柄 + 连击卡：每四击回复体力
 			if combo_count > combo_max:
 				combo_max = combo_count
+			if combo_count == int(settings.get("combo_threshold_fever", 5)):
+				Sound.play("crit") # 连击刚到狂热线：一声上行琶音，手心发烫
 			var base_pitch := 1.1 if pig.hp <= 0 else 0.85
 			Sound.play("crack", minf(1.5, base_pitch + float(settings.get("combo_pitch_step", 0.05)) * (combo_count - 1)))
 			landed = true
@@ -1445,10 +1447,10 @@ func spawn_particles(center: Vector2, kind := "", value := 0) -> void:
 			"life": randf_range(0.6, 1.0), "coin": is_coin, "tint": kind,
 			"spin": randf_range(0.0, TAU), "spin_speed": randf_range(4.0, 9.0)})
 
-func text_at(value: String, pos: Vector2, size: int, color := Color("#f4eadd")) -> void:
+func text_at(value: String, pos: Vector2, size: int, color := Color("#f4e0b8")) -> void:
 	draw_string(font, pos, value, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
 
-func text_center(value: String, center_x: float, y: float, size: int, color := Color("#f4eadd")) -> void:
+func text_center(value: String, center_x: float, y: float, size: int, color := Color("#f4e0b8")) -> void:
 	var width := font.get_string_size(value, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
 	text_at(value, Vector2(center_x - width / 2, y), size, color)
 
@@ -1640,7 +1642,7 @@ func draw_coin_face(c: Vector2, r: float, sx: float, heads: bool) -> void:
 func draw_gamble_flip() -> void:
 	if gamble_state != "flip" and gamble_state != "result":
 		return
-	draw_rect(Rect2(0, 0, 1280, 800), Color(0.02, 0.04, 0.04, 0.72))
+	draw_rect(Rect2(0, 0, 1280, 800), Color(0.055, 0.033, 0.02, 0.72))
 	var p: float = 1.0 if gamble_state == "result" else clampf(gamble_t / GAMBLE_FLIP_TIME, 0.0, 1.0)
 	var c := Vector2(640, 320)
 	var h: float = -sin(p * PI) * 130.0 # 抛起来再落下
@@ -1683,7 +1685,7 @@ func draw_blackout() -> void:
 	if blackout_fade <= 0.01:
 		return
 	var alpha: float = bills_fx.number("blackout", "darkness_alpha", 0.38) * blackout_fade
-	draw_rect(Rect2(0, 0, 1280, 800), Color(0.005, 0.008, 0.015, alpha))
+	draw_rect(Rect2(0, 0, 1280, 800), Color(0.02, 0.011, 0.005, alpha))
 
 ## 暗角贴图：中心透明、越靠边越黑，开局生成一次。
 ## 用贴图而不是叠十几层矩形，一帧就两次 draw，加再多猪也不心疼。
@@ -1705,15 +1707,15 @@ func draw_desk() -> void:
 	if use_desk_3d and desk3d != null:
 		draw_texture(desk3d.get_texture(), Vector2.ZERO) # 3D 赌场赌桌
 		return
-	# 2D 回退桌：胡桃木外框、祖母绿绒面、黄铜镶边。
-	panel(Rect2(98, 272, 1084, 402), Color("#171b18"), 42)
+	# 2D 回退桌：胡桃木外框、深色木台面、黄铜镶边。
+	panel(Rect2(98, 272, 1084, 402), Color("#1c120a"), 42)
 	panel(Rect2(106, 260, 1068, 398), Color("#38251a"), 40)
 	panel(Rect2(120, 274, 1040, 370), Color("#b18a45"), 36)
-	panel(Rect2(128, 282, 1024, 354), Color("#0b3829"), 31)
-	panel(Rect2(145, 299, 990, 320), Color("#104632"), 25)
-	# 绒面上的柔和走向和暗角，保留足够平整的猪活动区。
+	panel(Rect2(128, 282, 1024, 354), Color("#402917"), 31)
+	panel(Rect2(145, 299, 990, 320), Color("#573a20"), 25)
+	# 台面上的柔和走向和暗角，保留足够平整的猪活动区。
 	for y in range(315, 610, 38):
-		draw_line(Vector2(152, y), Vector2(1128, y + 3), Color(0.52, 0.69, 0.43, 0.045), 1)
+		draw_line(Vector2(152, y), Vector2(1128, y + 3), Color(0.78, 0.60, 0.40, 0.05), 1)
 	draw_rect(Rect2(142, 296, 996, 326), Color("#d1ad59", 0.72), false, 2)
 	draw_rect(Rect2(151, 305, 978, 308), Color("#d1ad59", 0.30), false, 1)
 	# 椭圆下注圈和庄家区线，线条压在绒面之下，不干扰目标判定。
@@ -1776,19 +1778,19 @@ func draw_watchers() -> void:
 
 ## 开场序幕：交代「欠了一屁股债 + 只能敲存钱罐 + 停不下来」
 func draw_intro() -> void:
-	draw_rect(Rect2(0, 0, 1280, 800), Color(0.03, 0.06, 0.06, 0.82)) # 半透，让桌子在序幕里压暗可见
+	draw_rect(Rect2(0, 0, 1280, 800), Color(0.075, 0.045, 0.026, 0.82)) # 半透，让桌子在序幕里压暗可见
 	text_center(String(story.get("intro_title", "最后期限")), 640, 196, 42, Color("#efbc72"))
 	var lines: Array = story.get("intro_lines", [])
 	for i in range(lines.size()):
 		var last: bool = i == lines.size() - 1
 		text_center(String(lines[i]), 640, 292 + i * 50, 22, Color("#ffe092") if last else Color("#d8e2dc"))
 	button(INTRO_RECT, String(story.get("intro_button", "敲开第一只")))
-	text_center(String(story.get("intro_hint", "点按钮或按任意键开始")), 640, 600, 17, Color("#a4b6af"))
+	text_center(String(story.get("intro_hint", "点按钮或按任意键开始")), 640, 600, 17, Color("#c9b08a"))
 
 
 func _draw() -> void:
-	draw_rect(Rect2(0, 0, 1280, 800), Color("#202b2b"))
-	draw_circle(Vector2(1050, 180), 380, Color("#263332"))
+	draw_rect(Rect2(0, 0, 1280, 800), Color("#241610")) # 西部酒馆：深棕底色
+	draw_circle(Vector2(1050, 180), 380, Color("#312012"))
 	draw_watchers() # 桌后那排黑影：画在桌子之前，才像"站在你身后看着"
 	draw_desk() # 桌面先铺，后面的 HUD / 猪 / 卡片都在它上面
 	if intro_open:
@@ -1796,7 +1798,7 @@ func _draw() -> void:
 		draw_blackout()
 		return
 	text_at(String(story.get("title", "敲猪还债")), Vector2(54, 71), 36)
-	text_at("计科2403  ·  " + String(story.get("subtitle", "账单今天到期")), Vector2(55, 103), 16, Color("#a4b6af"))
+	text_at("计科2403  ·  " + String(story.get("subtitle", "账单今天到期")), Vector2(55, 103), 16, Color("#c9b08a"))
 	var stamina_max := float(settings.get("stamina_max", 100))
 	var stamina_cost := float(settings.get("stamina_cost", 4))
 	var low: bool = stamina < stamina_cost * 3.0
@@ -1805,20 +1807,20 @@ func _draw() -> void:
 		bar_color = Color("#e06c5c").lerp(Color.WHITE, 0.5 * sin(stamina_flash * 40) + 0.5)
 	text_at("体力 " + str(int(stamina)) + " / " + str(int(stamina_max)), Vector2(330, 103), 20, bar_color)
 	text_at("游戏日期 " + format_game_date(game_day), Vector2(745, 103), 17, Color("#efbc72"))
-	panel(Rect2(500, 90, 220, 13), Color("#1f2b29"), 5)
+	panel(Rect2(500, 90, 220, 13), Color("#241a10"), 5)
 	panel(Rect2(500, 90, 220 * clampf(stamina / stamina_max, 0.0, 1.0), 13), bar_color, 5)
 	if Sound.muted: # 静音得有个可见的出口，否则玩家会以为游戏坏了
-		text_at("已静音 · M 恢复", Vector2(975, 103), 16, Color("#8fa39c"))
+		text_at("已静音 · M 恢复", Vector2(975, 103), 16, Color("#b59a7c"))
 	if double_timer > 0.0:
 		text_at("双倍中 ×2 剩 " + ("%.0f" % double_timer) + "s", Vector2(975, 103), 20, Color("#a4d007"))
 	button(RESET_RECT, "重新开始")
-	panel(Rect2(52, 137, 1176, 98), Color("#303d3b"))
-	text_at("余额 ¥", Vector2(80, 174), 17, Color("#a4b6af"))
+	panel(Rect2(52, 137, 1176, 98), Color("#37251a"))
+	text_at("余额 ¥", Vector2(80, 174), 17, Color("#c9b08a"))
 	text_at(str(score).pad_zeros(3), Vector2(80, 214), 32, Color("#efbc72"))
 	text_at("敲碎 " + str(broken) + " 只", Vector2(255, 205), 24)
 	text_at("跨局碎片 " + str(meta_shards), Vector2(255, 227), 14, Color("#efbc72"))
 	# 猪的价目表移到底部整行：中部这块只有 220px 宽，四种猪的名字加金额会被账单纸压住
-	text_at("攒够 ¥" + str(int(settings.get("card_first_at", 120))) + " 后选择一项升级", Vector2(480, 196), 18, Color("#a4b6af"))
+	text_at("攒够 ¥" + str(int(settings.get("card_first_at", 120))) + " 后选择一项升级", Vector2(480, 196), 18, Color("#c9b08a"))
 	# 右上角原来写着「目标 ¥120 摆脱破产」+ 一条进度条，去掉了：把目标写在脸上，玩家就是在为数字打工，
 	# 而不是"再敲一只就够"。round_target 仍然生效（攒够即结算），只是不让玩家盯着倒计时。
 	# 靠右摆：原来在 x=700，纸叠有 46px 宽、还往上叠 6 层，正好盖住中部那句提示的"中途"两个字。
@@ -1866,7 +1868,7 @@ func _draw() -> void:
 	if active_names != "暂无":
 		text_center("账单联动：" + active_names, 640, 714, 15, Color("#ffb86b"))
 	text_center("移动鼠标瞄准 · 左键挥锤 · 小猪会跑动，挥锤耗体力 · R 重开", 640, 736, 22)
-	text_center(pig_legend() + "　｜　点桌边账单查看期限与联动", 640, 770, 15, Color("#a4b6af"))
+	text_center(pig_legend() + "　｜　点桌边账单查看期限与联动", 640, 770, 15, Color("#c9b08a"))
 	if cursor_hidden:
 		draw_hammer() # 锤子是光标：只在它真的顶掉了系统箭头时才画（躲催债那关也要看得见自己）
 	if phase == "playing":
@@ -2174,12 +2176,12 @@ func draw_card() -> void:
 	elif card_type == "collect":
 		card_badge(accent, "¥" + str(bill_amount), 32)
 		text_center("限时 " + str(int(bill_time)) + " 秒凑齐", 640, 464, 18, Color("#c7d5e0"))
-		text_center("限时凑钱小游戏", 640, 486, 18, Color("#a4b6af"))
+		text_center("限时凑钱小游戏", 640, 486, 18, Color("#c9b08a"))
 		text_center("凑不够就扣 ¥" + str(bill_amount), 640, 508, 16, Color("#e7a6a4"))
 	else: # dodge
 		card_badge(accent, "¥" + str(bill_amount), 32)
 		text_center("限时 " + str(int(bill_time)) + " 秒", 640, 464, 18, Color("#c7d5e0"))
-		text_center("躲开催债小游戏", 640, 486, 18, Color("#a4b6af"))
+		text_center("躲开催债小游戏", 640, 486, 18, Color("#c9b08a"))
 		text_center("被抓住就失败", 640, 508, 16, Color("#e7a6a4"))
 	button(CONTINUE_RECT, label, true, accent)
 	text_center(hint, 640, 652, 17, Color("#b1c0b8"))
@@ -2209,7 +2211,7 @@ func draw_collect() -> void:
 	panel(Rect2(40, 120, 1200, 560), Color("#1b2838"), 22)
 	text_at("账单到期 · 限时凑钱", Vector2(80, 170), 30, Color("#efbc72"))
 	text_at("应付 ¥" + str(bill_amount) + "      已凑 ¥" + str(collected), Vector2(80, 222), 24)
-	text_at("剩余 " + ("%.1f" % maxf(0.0, bill_timer)) + " 秒", Vector2(80, 262), 22, Color("#a4b6af"))
+	text_at("剩余 " + ("%.1f" % maxf(0.0, bill_timer)) + " 秒", Vector2(80, 262), 22, Color("#c9b08a"))
 	panel(Rect2(80, 296, 800, 16), Color("#171a21"), 6)
 	panel(Rect2(80, 296, 800 * clampf(bill_timer / bill_time, 0.0, 1.0), 16), Color("#efbc72"), 6)
 	text_at("点击金色硬币凑钱 · 别点黑色假币", Vector2(80, 340), 20, Color("#c7d5e0"))
@@ -2233,7 +2235,7 @@ func draw_dodge() -> void:
 	panel(Rect2(40, 120, 1200, 560), Color("#1b2838"), 22)
 	text_at("账单到期 · 躲开催债", Vector2(80, 170), 30, Color("#efbc72"))
 	text_at("应付 ¥" + str(bill_amount) + "      坚持到时间结束", Vector2(80, 222), 24)
-	text_at("剩余 " + ("%.1f" % maxf(0.0, bill_timer)) + " 秒", Vector2(80, 262), 22, Color("#a4b6af"))
+	text_at("剩余 " + ("%.1f" % maxf(0.0, bill_timer)) + " 秒", Vector2(80, 262), 22, Color("#c9b08a"))
 	panel(Rect2(80, 296, 800, 16), Color("#171a21"), 6)
 	panel(Rect2(80, 296, 800 * clampf(bill_timer / bill_time, 0.0, 1.0), 16), Color("#efbc72"), 6)
 	text_at("生命 ", Vector2(80, 340), 20, Color("#c7d5e0"))
@@ -2275,7 +2277,7 @@ func draw_finished() -> void:
 		text_center(story_line("win_title", "暂时安全"), 640, 345, 36, Color("#a4d007"))
 		text_center(story_line("win_line", "目标达成，你甩开了催债电话 —— 但桌上那叠账单，一张都没少。"), 640, 400, 22)
 	text_center("余额 ¥" + str(score) + "    敲碎 " + str(broken) + " 只", 640, 452, 26, Color("#efbc72"))
-	text_center("已还 " + str(paid_count) + " 张 · 还剩 " + str(bills.size()) + " 张（¥" + str(bills_total()) + "）", 640, 498, 20, Color("#a4b6af"))
+	text_center("已还 " + str(paid_count) + " 张 · 还剩 " + str(bills.size()) + " 张（¥" + str(bills_total()) + "）", 640, 498, 20, Color("#c9b08a"))
 	text_center("永久成长：" + meta_unlock_summary() + "　·　碎片 " + str(meta_shards), 640, 536, 15, Color("#efbc72"))
 	button(CONTINUE_RECT, "再来一轮")
 
@@ -2284,6 +2286,6 @@ func draw_bankrupt() -> void:
 	text_center(story_line("lose_title", "破产了"), 640, 345, 36, Color("#e7a6a4"))
 	text_center(story_line("lose_line", "敲碎 {broken} 只存钱罐，账单反而又多了几张。"), 640, 400, 22)
 	text_center("余额 ¥" + str(score) + "    敲碎 " + str(broken) + " 只", 640, 452, 26, Color("#efbc72"))
-	text_center("已还 " + str(paid_count) + " 张 · 还剩 " + str(bills.size()) + " 张（¥" + str(bills_total()) + "）", 640, 498, 20, Color("#a4b6af"))
+	text_center("已还 " + str(paid_count) + " 张 · 还剩 " + str(bills.size()) + " 张（¥" + str(bills_total()) + "）", 640, 498, 20, Color("#c9b08a"))
 	text_center("永久成长：" + meta_unlock_summary() + "　·　碎片 " + str(meta_shards), 640, 536, 15, Color("#efbc72"))
 	button(CONTINUE_RECT, "再来一轮")

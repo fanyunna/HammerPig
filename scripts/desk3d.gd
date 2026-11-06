@@ -22,14 +22,14 @@ var _desk_rect := Rect2()
 var _pen_rect := Rect2()
 var _cam: Camera3D
 
-## 赌桌由祖母绿绒面、胡桃木扶手、黄铜下注线、筹码与扑克牌组成。
-## 猪活动区域保持开阔；装饰贴在绒面上，不会挡住点击判定。
+## 酒馆木桌由深色木纹台面、胡桃木扶手、黄铜饰线、筹码与扑克牌组成。
+## 猪活动区域保持开阔；装饰贴在台面上，不会挡住点击判定。
 
 static var _felt_tex: ImageTexture
 static var _wood_tex: ImageTexture
 
 
-## 绒面：底色偏暗的绿 + 高频颗粒（毛绒感）+ 极轻的方向性纹理
+## 台面：酒馆旧木桌 —— 深棕木纹两色 + 高频颗粒（毛糙感）+ 大块深浅（磨损压痕）
 func _felt_texture() -> ImageTexture:
 	if _felt_tex != null:
 		return _felt_tex
@@ -41,8 +41,8 @@ func _felt_texture() -> ImageTexture:
 	n2.frequency = 0.02
 	var size := 256
 	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
-	var dark := Color("#123526")
-	var light := Color("#1d4a36")
+	var dark := Color("#4a2f18")
+	var light := Color("#6e4a2a")
 	for y in range(size):
 		for x in range(size):
 			var fuzz := n.get_noise_2d(float(x), float(y)) * 0.5 + 0.5 # 毛绒颗粒
@@ -56,7 +56,7 @@ func _felt_mat(scale_u: float, scale_v: float) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_texture = _felt_texture()
 	m.uv1_scale = Vector3(scale_u, scale_v, 1.0)
-	m.roughness = 0.97 # 绒面不反光
+	m.roughness = 0.75 # 旧木桌：不太反光
 	m.metallic = 0.0
 	return m
 
@@ -207,7 +207,7 @@ func _build_scene() -> void:
 	floor_node.rotation.x = -PI / 2.0
 	floor_node.position.y = FLOOR_Y
 	var fm := StandardMaterial3D.new()
-	fm.albedo_color = Color("#241f1e")
+	fm.albedo_color = Color("#231712") # 酒馆地板：暗暖棕
 	fm.roughness = 0.9
 	floor_node.material_override = fm
 	add_child(floor_node)
@@ -225,7 +225,7 @@ func _build_scene() -> void:
 	top.position = Vector3(0.0, -DESK_THICK / 2.0, desk_cz)
 	add_child(top)
 
-	# 绿绒台面：略微内缩，让外圈胡桃木桌沿和黄铜细线露出来。
+	# 深色木台面：略微内缩，让外圈胡桃木桌沿和黄铜细线露出来。
 	var felt := MeshInstance3D.new()
 	var felt_box := BoxMesh.new()
 	felt_box.size = Vector3(desk_w - 0.42, 0.035, desk_d - 0.42)

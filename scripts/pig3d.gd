@@ -18,6 +18,9 @@ var _eye_mat: StandardMaterial3D # 眼珠（催债猪靠一双红眼来警告）
 var _blush_mat: StandardMaterial3D # 腮红
 var _coin: MeshInstance3D # 投币口上插着的那枚币
 var _inner: Node3D # 罐子里攒着的那一堆钱（玻璃猪才看得见）
+var _hat: Node3D # 西部牛仔帽（pig_types 里 "hat": true 才显示）
+var _bandana: Node3D # 红三角巾（"bandana": true）
+var _star: Node3D # 胸前警长星（"star": true）
 var _body_base_scale := Vector3(1.13, 0.99, 1.04) # 轻微不对称，手工陶器不会是完美椭球
 static var _grain_tex: ImageTexture # 釉面颗粒法线贴图（8 只猪共用一份）
 var _base_color := Color("#f7c2bf") # 陶瓷粉
@@ -280,6 +283,80 @@ func _build_bank(parent: Node3D) -> void:
 	var tail := _part(parent, tail_mesh, dark, Vector3(0.0, 0.24, -1.0))
 	tail.rotation = Vector3(0.1, 0.0, 0.7)
 
+	_build_western(parent) # 西部配件一次建好、默认全藏，apply_type 按种类开关
+
+
+## 西部酒馆配件：牛仔帽、红三角巾、警长星。每只猪都在 _build_bank 里建好一份存成成员变量，
+## 默认隐藏；apply_type 按 pig_types 的布尔键（hat / bandana / star）开关 —— 换种类不重建网格。
+func _build_western(parent: Node3D) -> void:
+	var leather := _ceramic(Color("#8a5a2e"), 0.9, false) # 帽子的粗糙皮革
+	var leather_dark := _ceramic(Color("#5d3b1e"), 0.9, false) # 帽带
+	var fabric := _ceramic(Color("#b8322a"), 0.85, false) # 三角巾红布
+	var star_gold := _ceramic(Color("#e0b552"), 0.35, false) # 警长星：哑光黄铜
+
+	# 牛仔帽：压扁球帽冠 + 扁圆柱帽檐 + 一圈帽带，歪一点扣在头顶
+	_hat = Node3D.new()
+	_hat.visible = false
+	_hat.position = Vector3(-0.08, 0.90, -0.24) # 稍往后靠，给鼻子留出生位
+	_hat.rotation = Vector3(-0.12, 0.0, 0.16) # 牛仔帽要歪一点才有味道
+	parent.add_child(_hat)
+	var crown_mesh := SphereMesh.new()
+	crown_mesh.radius = 0.34
+	crown_mesh.height = 0.56
+	_part(_hat, crown_mesh, leather, Vector3(0.0, 0.16, 0.0), Vector3(1.0, 0.82, 1.0))
+	var brim_mesh := CylinderMesh.new()
+	brim_mesh.top_radius = 0.58
+	brim_mesh.bottom_radius = 0.58
+	brim_mesh.height = 0.055
+	brim_mesh.radial_segments = 28
+	_part(_hat, brim_mesh, leather, Vector3(0.0, 0.02, 0.0))
+	var band_mesh := TorusMesh.new()
+	band_mesh.inner_radius = 0.30
+	band_mesh.outer_radius = 0.36
+	band_mesh.rings = 10
+	band_mesh.ring_segments = 24
+	var band := _part(_hat, band_mesh, leather_dark, Vector3(0.0, 0.06, 0.0))
+	band.rotation.x = PI / 2.0 # 平放，箍在帽冠根部
+
+	# 红三角巾：鼻子下方绕脖子一圈，前头垂一个尖角
+	_bandana = Node3D.new()
+	_bandana.visible = false
+	parent.add_child(_bandana)
+	var neck_mesh := TorusMesh.new()
+	neck_mesh.inner_radius = 0.78
+	neck_mesh.outer_radius = 0.95
+	neck_mesh.rings = 12
+	neck_mesh.ring_segments = 28
+	var neck := _part(_bandana, neck_mesh, fabric, Vector3(0.0, -0.30, 0.12), Vector3(1.18, 1.0, 1.04))
+	neck.rotation.x = PI / 2.0 - 0.25 # 平放再前倾，贴着圆罐体的弧线
+	var knot_mesh := CylinderMesh.new()
+	knot_mesh.top_radius = 0.0
+	knot_mesh.bottom_radius = 0.13
+	knot_mesh.height = 0.34
+	knot_mesh.radial_segments = 12
+	var knot := _part(_bandana, knot_mesh, fabric, Vector3(0.0, -0.50, 0.80), Vector3(1.0, 1.0, 0.5))
+	knot.rotation.x = PI # 尖角朝下：三角巾打结后垂下来的那个角
+
+	# 警长星：中心小圆 + 五个小锥体拼出五角星，整体压扁贴在胸口弧面上
+	_star = Node3D.new()
+	_star.visible = false
+	_star.position = Vector3(0.0, -0.38, 0.92)
+	_star.rotation.x = -0.42 # 顺着胸口弧度往后仰
+	_star.scale = Vector3(1.0, 1.0, 0.4) # 压扁：锥体截面成椭圆，像徽章贴在身上
+	parent.add_child(_star)
+	var hub_mesh := SphereMesh.new()
+	hub_mesh.radius = 0.10
+	hub_mesh.height = 0.20
+	_part(_star, hub_mesh, star_gold, Vector3.ZERO)
+	for i in range(5):
+		var a := PI / 2.0 + float(i) * TAU / 5.0 # 第一个角指向正上方
+		var spike_mesh := CylinderMesh.new()
+		spike_mesh.top_radius = 0.0
+		spike_mesh.bottom_radius = 0.055
+		spike_mesh.height = 0.24
+		spike_mesh.radial_segments = 10
+		var spike := _part(_star, spike_mesh, star_gold, Vector3(cos(a) * 0.20, sin(a) * 0.20, 0.0))
+		spike.rotation.z = a - PI / 2.0 # 锥轴从 +y 转到该角的方向
 
 ## 换一身皮：猪重生时会换种类，重建整只太贵（还要重新生成网格），这里只改材质与整体缩放。
 ## t 是 balance.json 里 pig_types 的一项（空字典 = 用默认的陶瓷粉小猪）。
@@ -314,7 +391,13 @@ func apply_type(t: Dictionary) -> void:
 	if _inner != null:
 		_inner.visible = bool(t.get("glass", false))
 	if _coin != null:
-		_coin.visible = id != "debt" # 催债猪头上不插币：一看就不是存钱罐
+		_coin.visible = id != "debt" and not bool(t.get("hat", false)) # 催债猪不插币；牛仔帽会盖住投币口
+	if _hat != null:
+		_hat.visible = bool(t.get("hat", false))
+	if _bandana != null:
+		_bandana.visible = bool(t.get("bandana", false))
+	if _star != null:
+		_star.visible = bool(t.get("star", false))
 
 
 func _color(t: Dictionary, key: String, fallback: String) -> Color:

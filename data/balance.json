@@ -47,19 +47,19 @@
   "watchers": 8,
 
   "pig_types": [
-    { "id": "piggy", "label": "白猪", "weight": 50, "hp": 2, "value": 14, "speed": 1.0,  "scale": 1.0,
+    { "id": "piggy", "label": "牛仔猪", "weight": 50, "hp": 2, "value": 14, "speed": 1.0,  "scale": 1.0, "bandana": true,
       "color": "#f7c2bf", "accent": "#e79aa0", "eye": "#2f2a29", "blush": "#f2a0a4", "rough": 0.62 },
     { "id": "stripe", "label": "花猪", "weight": 16, "hp": 2, "value": 17, "speed": 1.05, "scale": 1.05, "striped": true,
       "color": "#efeade", "stripe": "#4f7d8c", "accent": "#7e9aa4", "eye": "#2b3a40", "blush": "#d9c9b4", "rough": 0.5 },
-    { "id": "mini",  "label": "青猪", "weight": 15, "hp": 1, "value": 9,  "speed": 1.85, "scale": 0.70,
+    { "id": "mini",  "label": "小牛仔", "weight": 15, "hp": 1, "value": 9,  "speed": 1.85, "scale": 0.70, "hat": true,
       "color": "#a8e0ef", "accent": "#6fb8d0", "eye": "#223038", "blush": "#9fd6e6", "rough": 0.45 },
-    { "id": "gold",  "label": "金猪", "weight": 11, "hp": 3, "value": 34, "speed": 1.30, "scale": 1.16,
+    { "id": "gold",  "label": "警长金猪", "weight": 11, "hp": 3, "value": 34, "speed": 1.30, "scale": 1.16, "star": true,
       "color": "#e0b552", "accent": "#b98a2c", "eye": "#3a2a12", "blush": "#f0d68f", "rough": 0.5 },
     { "id": "debt",  "label": "黑猪", "weight": 10, "hp": 1, "value": -9, "speed": 1.60, "scale": 0.95, "min_score": 15,
       "color": "#3b3a44", "accent": "#22212a", "eye": "#e0503f", "blush": "#7a2630", "rough": 0.6 },
     { "id": "glass", "label": "玻璃猪", "weight": 9, "hp": 1, "value": 17, "speed": 1.15, "scale": 0.85,
       "glass": true, "alpha": 0.30, "color": "#cfe8ee", "accent": "#7fa8b4", "eye": "#223038", "blush": "#a9d2dc", "rough": 0.18 },
-    { "id": "fat",   "label": "大肚猪", "weight": 7, "hp": 4, "value": 36, "speed": 0.70, "scale": 1.30,
+    { "id": "fat",   "label": "胖警长", "weight": 7, "hp": 4, "value": 36, "speed": 0.70, "scale": 1.30, "hat": true,
       "color": "#c9743f", "accent": "#9c5528", "eye": "#33200f", "blush": "#e0925c", "rough": 0.68 }
   ]
 }
