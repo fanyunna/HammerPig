@@ -67,8 +67,10 @@ var cooldown := 0.0
 var swing := 0.0
 const BillManagerScript := preload("res://scripts/bill_manager.gd")
 const Hammer3DScript := preload("res://scripts/hammer3d.gd")
+const WheelScript := preload("res://scripts/lucky_wheel.gd")
 var bills_fx # 账单效果：电费停电 / 信用卡利息 / 房租催收（BillManagerScript 实例）
 var hammer3d # 独立透明视口中的立体锤光标
+var wheel # 幸运转盘：独立子节点，低侵入，只读写 main 的公开状态
 var earned_total := 0 # 本局累计赚到的钱（房租催收按它跨阈值触发）
 var last_observed_score := 0
 var vignette_tex: ImageTexture # 停电暗角贴图（开局生成一次）
@@ -76,6 +78,7 @@ var bonus_timer := 0.0 # 支付电费后的挥锤冷却减免还剩多久
 var blackout_fade := 0.0 # 停电暗化的渐入进度（0→1，避免闪进闪出）
 var collection_flash := 0.0 # 房东催收的红色警告脉冲
 var hammer_position := Vector2(1030, 540)
+var mouse_pos := PIG_BOUNDS.get_center() # 追踪的鼠标位置：窗口里由鼠标事件实时更新；headless 停在桌中央，等价旧行为
 var card_type := "" # "reward" / "double" / "collect" / "dodge"
 var card_offers: Array[Dictionary] = [] # 三选一卡片：本局升级与即时奖励
 var hammer_damage_bonus := 0
@@ -158,6 +161,9 @@ func _ready() -> void:
 	if not DisplayServer.get_name().contains("headless"):
 		hammer3d = Hammer3DScript.new()
 		add_child(hammer3d)
+	wheel = WheelScript.new()
+	add_child(wheel) # 最后挂上：画在所有东西之上（抽奖按钮 / 弹窗 / 金币特效）
+	wheel.setup(self)
 	reset_game()
 
 
@@ -651,8 +657,13 @@ func draw_bill_detail() -> void:
 
 func random_pig_velocity(type := {}) -> Vector2:
 	var angle := randf_range(0.0, TAU)
-	var sp := float(settings.get("pig_speed", 90)) * float(type.get("speed", 1.0)) # 每种猪自带速度倍率
+	var sp := float(settings.get("pig_speed", 90)) * float(type.get("speed", 1.0)) * wheel_speed_mul() # 每种猪自带速度倍率；转盘变慢/变快在这里生效
 	return Vector2(cos(angle), sin(angle)) * sp * randf_range(0.7, 1.3)
+
+
+## 鼠标是否在小猪活动区内：区内举锤瞄准可敲击；区外是自由鼠标（普通光标，自由点所有 UI）
+func mouse_in_pig_bounds() -> bool:
+	return PIG_BOUNDS.has_point(mouse_pos)
 
 
 ## 自绘的锤子只在「鼠标就是你的身体」时才顶替系统光标：敲猪和躲催债这两段。
@@ -663,6 +674,8 @@ func sync_cursor() -> void:
 	var hide: bool = bool(settings.get("hammer_cursor", true))
 	hide = hide and (phase == "playing" or (phase == "challenge" and card_type == "dodge"))
 	hide = hide and not intro_open and not bill_open and bill_detail < 0
+	hide = hide and not (wheel != null and wheel.is_open()) # 转盘弹窗里得看得见箭头
+	hide = hide and (phase != "playing" or mouse_in_pig_bounds()) # 敲猪时鼠标进小猪活动区才举锤；区外还给系统箭头自由点 UI
 	if hide == cursor_hidden:
 		return
 	cursor_hidden = hide
@@ -889,6 +902,8 @@ func reset_game() -> void:
 	if use_3d:
 		for i in range(mini(pigs.size(), pig3d.size())):
 			pig3d[i].apply_type(Dictionary(pigs[i].type))
+	if wheel != null:
+		wheel.reset_run() # 新局：机会/连击/三个 buff 计时全部清零（多余的金猪视口上面已随 pig3d 裁掉）
 	queue_redraw()
 
 func _process(delta: float) -> void:
@@ -897,6 +912,9 @@ func _process(delta: float) -> void:
 		# 编辑器热重载不会重跑 _ready()；运行中的窗口也要能补建新加入的 3D 锤子视口。
 		hammer3d = Hammer3DScript.new()
 		add_child(hammer3d)
+	if wheel != null and wheel.is_open(): # 转盘弹窗：整局暂停（猪停刷、不能砸）；转盘自己的 _process 继续转
+		queue_redraw()
+		return
 	if bill_open or bill_detail >= 0: # 翻账单的时候整局都停下来：猪不走、卡不计时
 		queue_redraw()
 		return
@@ -918,6 +936,8 @@ func _process(delta: float) -> void:
 	var want_fade := 1.0 if bills_fx.is_active("blackout") else 0.0
 	blackout_fade = move_toward(blackout_fade, want_fade, delta / 0.6)
 	double_timer = maxf(0.0, double_timer - delta)
+	if wheel != null:
+		wheel.tick(delta) # 转盘层：余额跨线送机会、buff 独立倒计时、金猪压扁/到期
 	combo_timer = maxf(0.0, combo_timer - delta)
 	if combo_timer <= 0.0:
 		combo_count = 0
@@ -947,13 +967,14 @@ func _process(delta: float) -> void:
 			stamina_regen -= float(fatigue_rule.get("stamina_regen_penalty", 0.12))
 		stamina_regen = maxf(0.0, stamina_regen)
 		stamina = minf(stamina_max, stamina + stamina_regen * delta)
-		hammer_position = get_global_mouse_position()
+		if mouse_in_pig_bounds(): # 区外取消跟随：锤子停在最后一次瞄准处，光标也还给了系统
+			hammer_position = mouse_pos
 		for i in range(pigs.size()):
 			var pig: Dictionary = pigs[i]
 			pig.flash = maxf(0.0, pig.flash - delta)
 			pig.hop = maxf(0.0, pig.hop - delta)
 			if pig.hp > 0:
-				pig.position += pig.velocity * delta
+				pig.position += pig.velocity * delta * wheel_speed_mul()
 				# 走路弹跳：相位随位移推进（每 26px 一步、蹦一下），速度越快蹦得越快
 				pig.hop_phase = fmod(float(pig.get("hop_phase", 0.0)) + pig.velocity.length() * delta / 26.0 * PI, TAU)
 				if absf(pig.velocity.x) > 4.0: # 近乎竖直走时别乱翻朝向
@@ -965,7 +986,7 @@ func _process(delta: float) -> void:
 					pig.velocity.y = -pig.velocity.y
 					pig.position.y = clampf(pig.position.y, PIG_BOUNDS.position.y, PIG_BOUNDS.end.y)
 			else:
-				pig.respawn -= delta
+				pig.respawn -= delta * wheel_speed_mul() # 转盘变慢/变快同样作用于刷新速度
 				if pig.respawn <= 0.0:
 					pig.type = pick_pig_type() # 重生时换一种：桌上永远有新的诱惑
 					pig.max_hp = pig_max_hp(pig.type)
@@ -1012,12 +1033,21 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouse:
+		mouse_pos = event.position # 鼠标一动就更新分界判定：区内举锤瞄准，区外自由光标
 	if intro_open: # 序幕期间吞掉一切输入：点按钮或按任意键都只是「开始」
 		if event is InputEventMouseButton:
 			if event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 				intro_open = false
 		elif event is InputEventKey and event.pressed and not event.echo:
 			intro_open = false
+		return
+	if wheel != null and wheel.is_open(): # 转盘弹窗期间：只认「确认」（点击或空格/回车），其余一律吞掉
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			wheel.handle_click(get_global_mouse_position())
+		elif event is InputEventKey and event.pressed and not event.echo:
+			if event.keycode == KEY_SPACE or event.keycode == KEY_ENTER:
+				wheel.confirm_result()
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_B: # 账本：开 / 收起
@@ -1068,6 +1098,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			queue_redraw()
 			return
 		if bill_open: # 账本摊开着：点纸放大，点外面收起
+			if wheel != null and wheel.handle_click(point): # 压在账本右上角的抽奖按钮：点它不翻账本
+				queue_redraw()
+				return
 			if LEDGER_RECT.has_point(point):
 				var idx := ledger_index_at(point)
 				if idx >= 0:
@@ -1112,8 +1145,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			if CONTINUE_RECT.has_point(point):
 				Sound.play("click")
 				reset_game()
-		else: # playing：桌边那枚硬币的按钮在前面已经处理过，这里就只剩挥锤了
-			strike(point)
+		else: # playing：UI 都在小猪活动区之外，由上面各分支各自处理
+			if wheel != null and wheel.handle_click(point): # 抽奖按钮：点到了就不挥锤
+				queue_redraw()
+			elif PIG_BOUNDS.has_point(point): # 区内：挥锤照旧
+				strike(point)
+			# 区外点到空白：自由鼠标，不挥锤、也不清连击
 
 func end_round_exhausted() -> void:
 	# 体力见底：本轮结束（不是破产，余额保留，R 重开）
@@ -1152,6 +1189,10 @@ func strike(point: Vector2) -> void:
 			if hammer_damage_bonus > 0 and combo_count >= 3:
 				hit_damage += 1 # 重锤 + 连击：連击热度达到 3 后再加一伤害
 			pig.hp -= hit_damage
+			if bool(pig.get("wheel_gold", false)): # 转盘金猪走专属结算：一锤 +¥200，压扁回弹后爆金币
+				landed = true
+				_resolve_wheel_gold_hit(pig)
+				break
 			if stamina_cost_reduction > 0.0 and combo_bonus_per_hit > 0 and hits % 4 == 0:
 				stamina = minf(float(settings.get("stamina_max", 100)), stamina + 8.0) # 轻柄 + 连击卡：每四击回复体力
 			if combo_count > combo_max:
@@ -1182,6 +1223,7 @@ func strike(point: Vector2) -> void:
 				else:
 					if double_timer > 0.0:
 						gain *= 2
+					gain = roundi(float(gain) * wheel_score_mul()) # 转盘得分翻倍：独立计时器，可与卡片双倍叠乘
 					score += gain
 				broken += 1
 				spawn_particles(pig.position, kind, gain)
@@ -1215,8 +1257,102 @@ func strike(point: Vector2) -> void:
 					# 留半秒让反馈播完 —— 这段时间玩家还能继续砸，等于又多攒了几块。
 					card_delay = float(settings.get("card_pop_delay", 0.45))
 			break
+	if wheel != null: # 转盘机会的连击计数：砸中 +1，漏砸（挥空）清零
+		if landed:
+			wheel.on_landed_hit()
+		else:
+			wheel.on_missed_swing()
 	if not landed: # 挥空的"风声"要比命中轻，否则每次空挥都像打到了东西
 		Sound.play("miss", 1.0, 0.7)
+
+## 转盘金猪的结算：固定 +¥200（不吃卡片/连击加成），压扁回弹之后由转盘层引爆金币特效
+func _resolve_wheel_gold_hit(pig: Dictionary) -> void:
+	pig.hp = 0
+	pig.respawn = 9999.0 # 不让普通重生逻辑捡走；转盘层在压扁动画结束后移除
+	pig.gold_squash = 0.34
+	var gain := 200
+	score += gain
+	shake = maxf(shake, float(settings.get("shake_duration", 0.12)))
+	popups.append({"position": pig.position + Vector2(0, -55), "life": 0.9,
+		"text": "+¥" + str(gain), "color": Color("#ffd76a")})
+	Sound.play("pop", 0.85)
+	pig_broken.emit(gain)
+	if score >= int(settings.round_target):
+		end_reason = "target"
+		phase = "finished"
+		award_meta_progress()
+		Sound.play("win")
+
+## 转盘 buff 的当前倍率。速度同时作用于小猪移动与重生倒计时；得分与卡片双倍相互独立
+func wheel_speed_mul() -> float:
+	return 1.0 if wheel == null else wheel.pig_speed_multiplier()
+
+func wheel_score_mul() -> float:
+	return 1.0 if wheel == null else wheel.score_multiplier()
+
+## 转盘「直还账单」：免费清掉最便宜的 count 张（连带它们带出的利息/滞纳金单）
+func pay_bills_free(count: int) -> int:
+	var paid := 0
+	for i in range(count):
+		if bills.is_empty():
+			break
+		clear_cheapest_bill()
+		paid += 1
+	if paid > 0:
+		popups.append({"position": Vector2(640, 300), "life": 1.6,
+			"text": "转盘偿还了 " + str(paid) + " 张账单", "color": Color("#8fd0a8")})
+		Sound.play("cash", 0.85)
+	return paid
+
+## 转盘「金猪降临」：临时加 count 只金色小猪（一锤 +¥200，到期没被砸中自动消失）
+func spawn_wheel_gold_pigs(count: int) -> void:
+	var t: Dictionary = wheel.gold_pig_type()
+	for i in range(count):
+		pigs.append({
+			"position": _pick_gold_spawn_pos(),
+			"type": t.duplicate(), "hp": 1, "max_hp": 1, "respawn": 9999.0,
+			"flash": 0.0, "hop": 0.0, "seed": randf() * TAU,
+			"hop_phase": randf() * TAU, "left": randf() < 0.5,
+			"velocity": random_pig_velocity(t),
+			"wheel_gold": true, "gold_squash": 0.0, "gold_life": wheel.GOLD_PIG_LIFE,
+		})
+		if use_3d:
+			var vp := Pig3D.new()
+			add_child(vp)
+			pig3d.append(vp)
+			vp.apply_type(t)
+	popups.append({"position": Vector2(640, 300), "life": 1.6,
+		"text": "金猪降临！每只 +¥200", "color": Color("#ffd76a")})
+	Sound.play("crit")
+
+## 给金猪挑个落脚处：多采几个候选点，留一个离现有猪群最远的，避免叠在一起
+func _pick_gold_spawn_pos() -> Vector2:
+	var area := PIG_BOUNDS.grow(-30.0)
+	var best := Vector2(area.position.x + area.size.x * randf(),
+		area.position.y + area.size.y * randf())
+	var best_dist := -1.0
+	for i in range(14):
+		var cand := Vector2(area.position.x + area.size.x * randf(),
+			area.position.y + area.size.y * randf())
+		var nearest := 9999.0
+		for p in pigs:
+			if int(p.hp) > 0:
+				nearest = minf(nearest, cand.distance_to(p.position))
+		if nearest > best_dist:
+			best_dist = nearest
+			best = cand
+	return best
+
+## 移除一只猪（转盘金猪专用）：pigs 与 pig3d 按下标一一对应，必须同步删
+func despawn_pig(index: int) -> void:
+	if index < 0 or index >= pigs.size():
+		return
+	pigs.remove_at(index)
+	if index < pig3d.size():
+		var vp: Pig3D = pig3d[index]
+		pig3d.remove_at(index)
+		if is_instance_valid(vp):
+			vp.queue_free()
 
 func open_card() -> void:
 	card_type = roll_card()
@@ -1945,6 +2081,8 @@ func _draw() -> void:
 	draw_blackout() # 电费未缴时覆盖全屏
 
 func draw_pig(pig: Dictionary, index: int) -> void:
+	if bool(pig.get("wheel_gold", false)):
+		_draw_gold_aura(pig) # 金猪的自发光光晕画在身后，和普通猪一眼区分
 	var t: Dictionary = pig.get("type", {})
 	var tex: Texture2D = pig_tex.get(String(t.get("id", "piggy")))
 	if tex != null: # 有贴图走贴图：AI 素材替掉图元 3D 模型
@@ -1960,6 +2098,15 @@ func draw_pig(pig: Dictionary, index: int) -> void:
 		draw_set_transform(pig.position + Vector2(0, 43 * s), 0, Vector2(1, 0.25))
 		draw_circle(Vector2.ZERO, 62 * s, Color(0.12, 0.1, 0.08, 0.27)) # 桌面投影
 		draw_set_transform(Vector2.ZERO)
+		if bool(pig.get("wheel_gold", false)): # 金猪：压扁回弹形变 + 暖黄描边，走专属分支
+			var sq := _gold_squash_scale(pig)
+			draw_set_transform(pos, 0.0, sq)
+			draw_texture_rect(pig3d[index].get_texture(),
+				Rect2(Vector2(-pig_size() / 2.0, -pig_size() / 2.0), Vector2(pig_size(), pig_size())), false)
+			draw_arc(Vector2.ZERO, pig_size() * 0.5, 0.0, TAU, 44,
+				Color(1.0, 0.8, 0.3, 0.5 + 0.25 * sin(elapsed * 5.0 + float(pig.seed))), 2.5)
+			draw_set_transform(Vector2.ZERO)
+			return
 		var rect := Rect2(pos - Vector2(pig_size() / 2.0, pig_size() / 2.0), Vector2(pig_size(), pig_size()))
 		draw_texture_rect(pig3d[index].get_texture(), rect, false)
 		var dmg: int = int(pig.get("max_hp", 2)) - int(pig.hp) # 挨了几锤就画几道裂：金猪能裂两道
@@ -1971,6 +2118,29 @@ func draw_pig(pig: Dictionary, index: int) -> void:
 			draw_set_transform(Vector2.ZERO)
 		return
 	draw_pig_flat(pig)
+
+
+## 金猪的自发光光晕：两层暖光随时间明暗呼吸，外圈四个闪光点绕行
+func _draw_gold_aura(pig: Dictionary) -> void:
+	var s := pig_size() / PIG3D_SIZE
+	var pulse := 0.5 + 0.5 * sin(elapsed * 5.0 + float(pig.seed))
+	var c: Vector2 = pig.position
+	draw_circle(c, 64.0 * s * (1.06 + 0.08 * pulse), Color(1.0, 0.82, 0.3, 0.10 + 0.08 * pulse))
+	draw_circle(c, 52.0 * s * (1.03 + 0.06 * pulse), Color(1.0, 0.88, 0.45, 0.10 + 0.10 * pulse))
+	for i in range(4):
+		var a := elapsed * 1.9 + float(i) * TAU / 4.0 + float(pig.seed)
+		draw_circle(c + Vector2(cos(a), sin(a)) * 56.0 * s, 2.6 * s,
+			Color(1.0, 0.95, 0.62, 0.35 + 0.45 * pulse))
+
+
+## 金猪被砸中瞬间的压扁回弹：前半程压扁（横宽竖窄），后半程弹回原状
+func _gold_squash_scale(pig: Dictionary) -> Vector2:
+	var t: float = float(pig.get("gold_squash", 0.0))
+	if t <= 0.0:
+		return Vector2.ONE
+	var p := clampf(1.0 - t / 0.34, 0.0, 1.0)
+	var k := sin(p * PI) # 0 → 1 → 0
+	return Vector2(1.0 + 0.38 * k, 1.0 - 0.42 * k)
 
 
 ## 贴图猪（AI 西部素材）：移动时按 hop_phase 正弦弹跳 —— 视觉上移 = -abs(sin) × 跳高，
@@ -2080,16 +2250,18 @@ func draw_pig_tip() -> void:
 
 
 func draw_pig_shaken(pig: Dictionary, index: int) -> void:
+	# 金猪被砸中后的压扁回弹阶段（hp 已归零）仍要画猪本体，不能画成等待重生的圈
+	var alive: bool = pig.hp > 0 or float(pig.get("gold_squash", 0.0)) > 0.0
 	var sh: Vector2 = Vector2(shake_x, shake_y) if shake > 0.0 else Vector2.ZERO
 	if sh.is_zero_approx():
-		if pig.hp > 0:
+		if alive:
 			draw_pig(pig, index)
 		else:
 			draw_set_transform(pig.position)
 			draw_arc(Vector2.ZERO, 36, 0, TAU, 32, Color("#765d45"), 2)
 			draw_set_transform(Vector2.ZERO)
 		return
-	if pig.hp > 0:
+	if alive:
 		var saved: Vector2 = pig.position
 		pig.position = saved + sh
 		draw_pig(pig, index)

@@ -433,6 +433,45 @@ func run() -> void:
     game._process(0.016)
     check(game.cursor_hidden, "...and the hammer takes over again once you are back at the table")
 
+    # --- 鼠标分界：小猪活动区内举锤瞄准；区外还给系统箭头，点击不挥锤 ---
+    key_press(KEY_R)
+    game.next_card = 100000
+    game.gamble_used = true
+    game.mouse_pos = game.PIG_BOUNDS.get_center()
+    game._process(0.016)
+    check(game.cursor_hidden, "inside the pig pen the hammer still stands in for the cursor")
+    check(game.hammer_position == game.mouse_pos, "...and follows the mouse while it stays inside")
+    var hp_inside: Vector2 = game.hammer_position
+    game.mouse_pos = Vector2(1150, 120) # 活动区外那一圈按钮带（抽奖 / 重开都在这）
+    game._process(0.016)
+    check(not game.cursor_hidden, "leaving the pen hands the cursor back to the system arrow")
+    check(game.hammer_position == hp_inside, "...and stops dragging the hammer along")
+    # 区外左键不是挥锤：冷却不动、连击不清
+    game.wheel.streak = 7
+    game.cooldown = 0.0
+    var outside_click := InputEventMouseButton.new()
+    outside_click.button_index = MOUSE_BUTTON_LEFT
+    outside_click.pressed = true
+    game._unhandled_input(outside_click) # headless 下 get_global_mouse_position()=(0,0)，活动区外
+    check(game.cooldown == 0.0 and game.wheel.streak == 7, "clicking outside the pen neither swings nor breaks the streak")
+    # 回到区内：照旧挥锤
+    game.mouse_pos = game.pigs[0].position
+    click(game.pigs[0].position)
+    check(game.cooldown > 0.0, "clicking inside the pen swings the hammer as always")
+    # 账单与转盘互相独立：开账本不连带转盘，开转盘不连带账本
+    key_press(KEY_R)
+    game.next_card = 100000
+    game.gamble_used = true
+    game.bill_open = true
+    game._process(0.016)
+    check(not game.wheel.is_open(), "opening the ledger does not drag the wheel in")
+    game.bill_open = false
+    game.wheel.chances = 1
+    game.wheel.open_wheel(0)
+    check(not game.bill_open and game.bill_detail == -1, "opening the wheel does not drag the ledger in")
+    game.wheel.finish_spin()
+    game.wheel.confirm_result()
+
     # --- 大肚猪要四锤；价目表只列见过的种类 ---
     var real: Array = [
         {"id": "fat", "label": "大肚猪", "weight": 100, "hp": 4, "value": 36, "speed": 0.7, "scale": 1.3},
@@ -645,6 +684,136 @@ func run() -> void:
     check(game.pigs.size() == herd_base_count and is_equal_approx(game.pig_size_multiplier, 1.0),
         "a new run restores the original pig count and size")
     check(not game.pig_population_doubled, "a new run makes the herd card available again")
+
+    # --- 幸运转盘：机会获取 / 暂停 / 六种结果 / 金猪 ---
+    key_press(KEY_R)
+    game.next_card = 100000
+    game.gamble_used = true
+    check(game.wheel != null and game.wheel.chances == 0, "a fresh run starts with no wheel chances")
+    check(not game.wheel.open_wheel(), "the wheel refuses to open without chances")
+
+    # 余额跨过 ¥500 → +1 次机会
+    game.score = 499
+    game._process(0.016)
+    check(game.wheel.chances == 0, "no wheel chance just below ¥500")
+    game.score = 500
+    game._process(0.016)
+    check(game.wheel.chances == 1, "reaching ¥500 grants a wheel chance")
+    game.wheel.chances = 0
+
+    # 连续砸中 12 只 → +1 次机会；漏砸（挥空）清零
+    game.settings["pig_types"] = [
+        {"id": "piggy", "weight": 100, "hp": 1, "value": 1, "speed": 0.0, "scale": 1.0}
+    ]
+    key_press(KEY_R)
+    game.next_card = 100000
+    game.gamble_used = true
+    for i in range(12):
+        click(game.pigs[i].position)
+    check(game.wheel.chances == 1 and game.wheel.streak == 0,
+        "12 consecutive hits grant a wheel chance and reset the streak")
+    for i in range(12, 17):
+        click(game.pigs[i].position)
+    check(game.wheel.streak == 5, "landed hits count up the streak")
+    click(Vector2(0, 0))
+    check(game.wheel.streak == 0, "a missed swing resets the streak")
+    game.wheel.chances = 0
+
+    # 转盘弹窗期间整局暂停；结果 0 = +¥120
+    game.wheel.chances = 1
+    check(game.wheel.open_wheel(0), "the wheel opens on a forced sector")
+    check(game.wheel.is_open(), "the wheel popup is open")
+    game.cooldown = 0.5
+    game._process(0.1)
+    check(game.cooldown == 0.5, "the wheel popup pauses the round")
+    var score_before_spin: int = game.score
+    game.wheel.finish_spin()
+    check(game.score == score_before_spin + 120, "sector 0 pays ¥120")
+    game.wheel.confirm_result()
+    check(not game.wheel.is_open(), "confirm closes the wheel popup")
+
+    # 结果 3 = 直还 5 张账单
+    key_press(KEY_R)
+    game.next_card = 100000
+    game.gamble_used = true
+    var bills_before: int = game.bills.size()
+    game.wheel.chances = 1
+    game.wheel.open_wheel(3)
+    game.wheel.finish_spin()
+    game.wheel.confirm_result()
+    check(game.bills.size() == bills_before - 5, "sector 3 pays off five bills for free")
+
+    # 结果 1 = 20 秒得分翻倍（独立计时器，作用在敲猪收益上）
+    game.wheel.chances = 1
+    game.wheel.open_wheel(1)
+    game.wheel.finish_spin()
+    game.wheel.confirm_result()
+    check(game.wheel.double_left > 19.0, "sector 1 arms the double buff for 20s")
+    var s0: int = game.score
+    break_pig(0)
+    check(game.score == s0 + 2, "the wheel double buff doubles pig earnings")
+
+    # 结果 2/4 = 变慢与变快叠加：独立计时器同时生效
+    game.wheel.chances = 2
+    game.wheel.open_wheel(2)
+    game.wheel.finish_spin()
+    game.wheel.confirm_result()
+    game.wheel.open_wheel(4)
+    game.wheel.finish_spin()
+    game.wheel.confirm_result()
+    check(game.wheel.slow_left > 0.0 and game.wheel.fast_left > 0.0,
+        "slow and fast buffs stack with independent timers")
+    check(game.wheel.pig_speed_multiplier() < 1.0, "the stacked multipliers apply to pig speed")
+    game._process(21.0)
+    check(game.wheel.slow_left == 0.0 and game.wheel.fast_left == 0.0
+        and is_equal_approx(game.wheel.pig_speed_multiplier(), 1.0),
+        "buffs expire on their own timers")
+
+    # 结果 5 = 金猪降临：生成 5 只，砸中 +¥200，压扁后爆金币移除，到期自动消失
+    key_press(KEY_R)
+    game.next_card = 100000
+    game.gamble_used = true
+    var base_pigs: int = game.pigs.size()
+    game.wheel.chances = 1
+    game.wheel.open_wheel(5)
+    game.wheel.finish_spin()
+    game.wheel.confirm_result()
+    check(game.pigs.size() == base_pigs + 5, "sector 5 spawns five extra pigs")
+    var golds := 0
+    for p in game.pigs:
+        if bool(p.get("wheel_gold", false)):
+            golds += 1
+    check(golds == 5, "...and they are the golden ones")
+
+    # 把普通猪挪出判定范围，单独砸一只金猪
+    var gi := -1
+    for i in range(game.pigs.size()):
+        if bool(game.pigs[i].get("wheel_gold", false)):
+            gi = i
+            break
+    for p in game.pigs:
+        if not bool(p.get("wheel_gold", false)):
+            p.position = Vector2(60, 760)
+    game.pigs[gi].velocity = Vector2.ZERO
+    var s1: int = game.score
+    click(game.pigs[gi].position)
+    check(game.score == s1 + 200, "smashing a wheel gold pig pays a flat ¥200")
+    check(game.pigs[gi].hp == 0 and float(game.pigs[gi].gold_squash) > 0.0,
+        "...and starts the squash animation before bursting")
+    game._process(0.5)
+    golds = 0
+    for p in game.pigs:
+        if bool(p.get("wheel_gold", false)):
+            golds += 1
+    check(golds == 4 and game.pigs.size() == base_pigs + 4,
+        "the smashed gold pig bursts into coins and leaves the table")
+    game._process(game.wheel.GOLD_PIG_LIFE + 1.0)
+    golds = 0
+    for p in game.pigs:
+        if bool(p.get("wheel_gold", false)):
+            golds += 1
+    check(golds == 0 and game.pigs.size() == base_pigs,
+        "unsmashed gold pigs vanish on their own and the table is back to normal")
 
     print("ALL ", checks, " CHECKS PASSED")
     game.queue_free() # 音效在 Sound 这个 autoload 里，不随场景释放，不用等它放完
