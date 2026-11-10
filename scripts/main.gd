@@ -87,6 +87,8 @@ var collection_flash := 0.0 # 房东催收的红色警告脉冲
 var hammer_position := Vector2(1030, 540)
 var card_type := "" # "reward" / "double" / "collect" / "dodge"
 var card_offers: Array[Dictionary] = [] # 三选一卡片：本局升级与即时奖励
+const CardBuild = preload("res://scripts/card_build.gd")
+var build = CardBuild.new()
 var hammer_damage_bonus := 0
 var stamina_cost_reduction := 0.0
 var earnings_multiplier := 1.0
@@ -125,7 +127,7 @@ var base_stamina_max := 100.0
 var stamina := 100.0
 var stamina_flash := 0.0
 var end_reason := "" # "target" / "exhausted"
-var font := SystemFont.new()
+var font: Font = SystemFont.new()
 
 var pig_tex: Dictionary = {} # 猪贴图：id → Texture2D（缺的键 = 素材还没生成，静默回退原路径）
 var hammer_tex: Texture2D = null # 握锤的手贴图；null = 用回 3D 锤
@@ -136,7 +138,7 @@ var use_3d := false # 由 balance.json 的 pig_3d 控制，headless 下强制关
 var use_desk_3d := false # 由 balance.json 的 desk_3d 控制（可单独关桌子、保留 3D 猪）
 
 func _ready() -> void:
-	font.font_names = PackedStringArray(["PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Noto Sans CJK SC"])
+	font = load("res://assets/fonts/NotoSansSC.ttf")
 	settings = JSON.parse_string(FileAccess.get_file_as_string(SETTINGS_PATH))
 	base_stamina_max = float(settings.get("stamina_max", 100))
 	var parsed = JSON.parse_string(FileAccess.get_file_as_string(STORY_PATH))
@@ -405,6 +407,7 @@ func pay_bill(index: int) -> void:
 	score -= due_amount
 	bills.remove_at(index)
 	paid_count += 1
+	build.progress("broker", self)
 	for j in range(bills.size() - 1, -1, -1): # 倒着删，免得删完后面的下标全乱
 		var left: Variant = bills[j]
 		if left is Dictionary and extra.has(String(left.get("source", ""))):
@@ -452,6 +455,7 @@ func clear_cheapest_bill() -> void:
 		if String(bills[i].get("source", "")) == tag:
 			bills.remove_at(i)
 	paid_count += 1
+	build.progress("broker", self)
 	bills_fx.sync(bills) # 万一免费清掉的是张电费/信用卡，效果也得跟着走
 	sort_bills()
 
@@ -854,6 +858,7 @@ func note_pig_type(t: Dictionary, warn_only := false) -> void:
 		tip_queue.append(tip)
 
 func reset_game() -> void:
+	build.reset()
 	while pig3d.size() > pig_count():
 		var extra_viewport: Pig3D = pig3d.pop_back()
 		if is_instance_valid(extra_viewport):
@@ -954,7 +959,7 @@ func _process(delta: float) -> void:
 		# 编辑器热重载不会重跑 _ready()；运行中的窗口也要能补建新加入的 3D 锤子视口。
 		hammer3d = Hammer3DScript.new()
 		add_child(hammer3d)
-	if bill_open or bill_detail >= 0 or quick_bill_hover() or help_open: # 翻账单的时候整局都停下来：猪不走、卡不计时
+	if build.panel_open or bill_open or bill_detail >= 0 or quick_bill_hover() or help_open:
 		queue_redraw()
 		return
 	elapsed += delta
@@ -967,6 +972,8 @@ func _process(delta: float) -> void:
 	if update_gamble(delta): # 抛硬币翻面/落定时整局暂停：猪不走、卡不计时
 		queue_redraw()
 		return
+	if phase == "playing":
+		build.tick(delta, self)
 	cooldown = maxf(0.0, cooldown - delta)
 	swing = maxf(0.0, swing - delta)
 	impact_timer = maxf(0.0, impact_timer - delta)
@@ -1033,7 +1040,7 @@ func _process(delta: float) -> void:
 					if use_3d and i < pig3d.size():
 						pig3d[i].apply_type(Dictionary(pig.type))
 		separate_pigs(delta)
-		if stamina < swing_stamina_cost():
+		if stamina < build.cost(self):
 			end_round_exhausted()
 	elif phase == "challenge":
 		bill_timer -= delta
@@ -1070,6 +1077,12 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_C and phase == "playing" and not intro_open:
+		build.panel_open = not build.panel_open
+		queue_redraw()
+		return
+	if build.panel_open and event is InputEventMouseButton:
+		return
 	if intro_open: # 序幕期间吞掉一切输入：点按钮或按任意键都只是「开始」
 		if event is InputEventMouseButton:
 			if event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
@@ -1240,14 +1253,10 @@ func strike_target(point: Vector2) -> Dictionary:
 			target = pig
 	return target
 
-func swing_stamina_cost() -> float:
-	return maxf(1.0, float(settings.get("stamina_cost", 4)) - stamina_cost_reduction)
-
-
 func strike(point: Vector2) -> void:
-	if phase != "playing" or cooldown > 0.0:
+	if phase != "playing" or cooldown > 0.0 or build.panel_open:
 		return
-	var cost := swing_stamina_cost()
+	var cost: float = build.cost(self)
 	if stamina < cost:
 		stamina_flash = 0.4
 		popups.append({"position": point + Vector2(-30, -40), "life": 0.7, "text": "体力不足"})
@@ -1255,8 +1264,8 @@ func strike(point: Vector2) -> void:
 		return
 	hammer_position = point
 	swing = 0.16
-	cooldown = maxf(0.08, float(settings.swing_cooldown) * swing_cooldown_mul() - hammer_cooldown_reduction)
-	stamina -= cost
+	cooldown = build.cooldown(self)
+	stamina = maxf(0.0, stamina - cost)
 	var landed := false # 有没有打到东西：空挥要有和命中完全不同的声音
 	var target := strike_target(point)
 	for pig in pigs:
@@ -1272,6 +1281,13 @@ func strike(point: Vector2) -> void:
 			var hit_damage := 1 + hammer_damage_bonus
 			if hammer_damage_bonus > 0 and combo_count >= 3:
 				hit_damage += 1 # 重锤 + 连击：連击热度达到 3 后再加一伤害
+			build.progress("berserker", self)
+			hit_damage += build.damage_bonus()
+			var critical: bool = build.roll_critical()
+			if critical:
+				hit_damage *= 2
+				Sound.play("crit")
+			build.critical_reward(critical, self)
 			pig.hp -= hit_damage
 			impact_position = point
 			impact_timer = 0.18
@@ -1288,62 +1304,72 @@ func strike(point: Vector2) -> void:
 			Sound.play("crack", minf(1.5, base_pitch + float(settings.get("combo_pitch_step", 0.05)) * (combo_count - 1)))
 			landed = true
 			if pig.hp <= 0:
-				pig.respawn = float(settings.respawn_seconds)
-				shake = float(settings.get("shake_duration", 0.12))
-				var kind: String = String(pig.type.get("id", "piggy"))
-				var gain := pig_value(pig.type)
-				if gain > 0:
-					gain = roundi(float(gain) * earnings_multiplier)
-					if combo_count > 1:
-						gain += (combo_count - 1) * combo_bonus_per_hit
-						if earnings_multiplier > 1.0:
-							gain += (combo_count - 1) * 2 # 贪婪 + 连击：连击层数继续放大收益
-				if combo_count >= int(settings.get("combo_threshold_fever", 5)):
-					for i in range(3): # 狂热：再撒两把，手气正旺的时候满桌是钱
-						spawn_particles(pig.position, kind, gain)
-				if gain < 0:
-					# 催债猪：碎了要倒贴。双倍卡只放大收益、不放大损失（"收益翻倍"，不是"损失翻倍"），
-					# 而且不该因为一锤失误就直接破产 —— 最多白干一场。
-					score = maxi(1, score + gain)
-				else:
-					if double_timer > 0.0:
-						gain *= 2
-					score += gain
-				broken += 1
-				spawn_particles(pig.position, kind, gain)
-				var pcolor := Color("#ffe092")
-				if gain < 0:
-					pcolor = Color("#e06c5c")
-					Sound.play("stamp", 1.0, 0.95)
-					Sound.play("tails", 1.0, 0.45) # 下坠音：这不是好事
-				else:
-					if kind == "gold":
-						pcolor = Color("#ffd76a")
-						Sound.play("pop", 0.82) # 大，闷
-						Sound.play("coin_land", 1.0, 0.55) # 金属余韵：一听就知道是大钱
-					elif kind == "mini":
-						Sound.play("pop", 1.35) # 小，脆
-						Sound.play("cash", 1.2, 0.4)
-					else:
-						Sound.play("pop")
-						Sound.play("cash", 1.0, 0.5) # 碎裂的闷响之后再给一声"叮"：钱到账了
-				popups.append({"position": pig.position + Vector2(0, -55), "life": 0.9,
-					"text": ("+¥" + str(gain) if gain > 0 else "-¥" + str(-gain)), "color": pcolor})
-				pig_broken.emit(gain)
-				if score >= int(settings.round_target):
-					end_reason = "target"
-					phase = "finished"
-					award_meta_progress()
-					Sound.play("win")
-				elif score >= next_card:
-					next_card += int(settings.card_interval)
-					# 别在这一帧就弹：一分钱势的钱票还飘着、粒子刚炸开、音效还没响完。
-					# 留半秒让反馈播完 —— 这段时间玩家还能继续砸，等于又多攒了几块。
-					card_delay = float(settings.get("card_pop_delay", 0.45))
+				settle_card_break(pig, false)
+			build.after_hit(pig, point, self)
 			break
 	if not landed: # 挥空的"风声"要比命中轻，否则每次空挥都像打到了东西
 		stamina = maxf(0.0, stamina - float(settings.get("stamina_miss_extra", 0.0)))
 		Sound.play("miss", 1.0, 0.7)
+
+func settle_card_break(pig: Dictionary, secondary: bool) -> void:
+	if pig.hp > 0 or float(pig.respawn) > 0.0:
+		return
+	pig.respawn = float(settings.respawn_seconds)
+	shake = float(settings.get("shake_duration", 0.12))
+	var kind: String = String(pig.type.get("id", "piggy"))
+	var gain := pig_value(pig.type)
+	if gain > 0:
+		gain = roundi(float(gain) * earnings_multiplier * build.income_multiplier())
+		if secondary:
+			gain += build.secondary_reward(self)
+		if combo_count > 1:
+			gain += (combo_count - 1) * combo_bonus_per_hit
+			if earnings_multiplier > 1.0:
+				gain += (combo_count - 1) * 2 # 贪婪 + 连击：连击层数继续放大收益
+	if combo_count >= int(settings.get("combo_threshold_fever", 5)):
+		for i in range(3): # 狂热：再撒两把，手气正旺的时候满桌是钱
+			spawn_particles(pig.position, kind, gain)
+	if gain < 0:
+		# 催债猪：碎了要倒贴。双倍卡只放大收益、不放大损失（"收益翻倍"，不是"损失翻倍"），
+		# 而且不该因为一锤失误就直接破产 —— 最多白干一场。
+		score = maxi(1, score + gain)
+	else:
+		if double_timer > 0.0:
+			gain *= 2
+		score += gain
+	broken += 1
+	build.progress("hunter", self)
+	spawn_particles(pig.position, kind, gain)
+	var pcolor := Color("#ffe092")
+	if gain < 0:
+		pcolor = Color("#e06c5c")
+		Sound.play("stamp", 1.0, 0.95)
+		Sound.play("tails", 1.0, 0.45) # 下坠音：这不是好事
+	else:
+		if kind == "gold":
+			pcolor = Color("#ffd76a")
+			Sound.play("pop", 0.82) # 大，闷
+			Sound.play("coin_land", 1.0, 0.55) # 金属余韵：一听就知道是大钱
+		elif kind == "mini":
+			Sound.play("pop", 1.35) # 小，脆
+			Sound.play("cash", 1.2, 0.4)
+		else:
+			Sound.play("pop")
+			Sound.play("cash", 1.0, 0.5) # 碎裂的闷响之后再给一声"叮"：钱到账了
+	popups.append({"position": pig.position + Vector2(0, -55), "life": 0.9,
+		"text": ("+¥" + str(gain) if gain > 0 else "-¥" + str(-gain)), "color": pcolor})
+	pig_broken.emit(gain)
+	if score >= int(settings.round_target):
+		end_reason = "target"
+		phase = "finished"
+		award_meta_progress()
+		Sound.play("win")
+	elif score >= next_card:
+		next_card += int(settings.card_interval)
+		# 别在这一帧就弹：一分钱势的钱票还飘着、粒子刚炸开、音效还没响完。
+		# 留半秒让反馈播完 —— 这段时间玩家还能继续砸，等于又多攒了几块。
+		card_delay = float(settings.get("card_pop_delay", 0.45))
+
 
 func open_card() -> void:
 	card_type = roll_card()
@@ -1385,6 +1411,7 @@ func make_card_offers() -> Array[Dictionary]:
 			card.desc = "已有连击联动：连击层数也计入收益"
 		elif String(card.id) == "stamina" and stamina_cost_reduction > 0.0:
 			card.desc = "轻型锤柄联动：上限额外 +10，恢复 45 点"
+	pool = build.prepare_pool(pool)
 	var offers: Array[Dictionary] = []
 	while offers.size() < 3 and not pool.is_empty():
 		var idx := randi() % pool.size()
@@ -1441,9 +1468,10 @@ func apply_card(choice := -1) -> void:
 		if choice < 0 or choice >= card_offers.size():
 			choice = 0
 		var offer: Dictionary = card_offers[choice]
+		build.acquire(String(offer.id), self)
 		match String(offer.id):
 			"heavy":
-				hammer_damage_bonus += 1
+				pass
 			"light":
 				stamina_cost_reduction += 0.5
 			"reach":
@@ -2123,6 +2151,9 @@ func _draw() -> void:
 			draw_finished()
 		else:
 			draw_bankrupt()
+	if phase == "playing":
+		build.draw_effects(self)
+		build.draw_status(self)
 	draw_pig_tip() # 新猪的说明书：画在猪之上、卡片之下（打开卡片时别挡着）
 	if bill_open:
 		draw_ledger()
@@ -2533,7 +2564,7 @@ func draw_upgrade_choices() -> void:
 		description.alignment = HORIZONTAL_ALIGNMENT_CENTER
 		description.break_flags = TextServer.BREAK_MANDATORY | TextServer.BREAK_WORD_BOUND | TextServer.BREAK_ADAPTIVE
 		description.max_lines_visible = 3
-		description.add_string(String(card.desc), font, 17)
+		description.add_string(String(card.desc), font, 15)
 		var description_top := rect.position.y + 231.0 - description.get_size().y * 0.5
 		description.draw(get_canvas_item(), Vector2(rect.position.x + 18.0, description_top), Color("#e2e9e4"))
 		text_center("选择 " + str(i + 1), rect.get_center().x, rect.end.y - 22, 16, accent.lightened(0.3))

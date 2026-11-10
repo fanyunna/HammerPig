@@ -24,3 +24,10 @@ Run the checks with the Godot 4.7.2 console executable:
 ```
 
 The last recorded result in the source project is 132 checks passed on 2026-11-02. Headless checks do not validate rendered visuals or play feel; inspect those in a windowed run.
+
+## 卡片构筑 2.0（待引擎验收）
+
+新增代价卡、重复选择进化卡和任务成长卡；游玩时按 `C` 暂停并查看等级与任务进度。
+详见 [模块交接](docs/card-build-2.0.md) 与 [施晨煜个人工作记录](docs/lucian-contribution.md)。
+新增测试：`godot --headless --path . --script res://tests/card_build.gd`。
+本轮仅通过静态语法检查，尚未运行引擎测试；中文字体显示问题仍待修复。
