@@ -293,7 +293,11 @@ func run() -> void:
     check(game.stamina == float(game.settings.stamina_max), "fresh round starts with full stamina")
     var stamina_before: float = game.stamina
     click(game.pigs[0].position)
-    check(game.stamina == stamina_before - float(game.settings.stamina_cost), "each swing costs stamina")
+    check(game.stamina == stamina_before - float(game.settings.stamina_cost), "a hit costs the base swing stamina")
+    stamina_before = game.stamina
+    click(Vector2(100, 300))
+    var miss_cost := float(game.settings.stamina_cost) + float(game.settings.stamina_miss_extra)
+    check(is_equal_approx(game.stamina, stamina_before - miss_cost), "a miss costs extra stamina")
     var score_before: int = game.score
     game.stamina = float(game.settings.stamina_cost) - 1.0
     click(game.pigs[0].position)
