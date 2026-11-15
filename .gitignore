@@ -1,0 +1,5 @@
+.godot/
+export/
+*.tmp
+*.log
+tmp_*.png
