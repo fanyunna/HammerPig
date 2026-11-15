@@ -550,6 +550,29 @@ game.apply_card()
 
 ---
 
+## 8.7 第六轮：可玩性（账单考核接回 + 代价型构筑卡，2026-11-15）
+
+诊断：整局只有「砸猪 → ¥135 三选一 → 砸猪」一个节拍、卡池全是加法数值卡、账单只是背景数字 —— 所以单调。本轮两项对策：
+
+1. **账单考核接回主循环**（`roll_card()` 此前写死 `return "reward"`，`start_challenge()` 只被自己调用 —— 代码完整却没通电）：
+   - `advance_calendar()` 撞到账单到期时，不再直接盖逾期章，而是挂起 `pending_challenge`（小额账单考「凑钱」collect，≥¥300 的考「躲催债」dodge），`_process` 收尾时 `start_bill_challenge()` 弹出。
+   - 一局最多 `bills.json` 的 `challenge_max_per_run`（3）次；超限退回原来的直接逾期。
+   - 逾期盖章逻辑抽成 `mark_bill_overdue(bill)`，日历与考核失败共用。
+   - 考核**赢** = `clear_bill_by_tag()` 免掉被催的那张 + ¥25；**输** = 扣 ¥30 + 利息 + 滞纳单 + 这张账单当场逾期。考核面板标题带 `challenge_label`（谁到期了、多少钱）。
+   - ⚠️ GDScript 4 对 typed array 的 `for x in arr` 迭代拿到的是**副本**，改元素必须用 `bills[i]["k"] = v` 索引（`finish_challenge` 里踩过：`for bill in bills` 里 `bill.overdue = true` 静默无效）。
+   - 自动化测试用 `bill_data["challenge_max_per_run"] = 0` 整体关掉（smoke.gd 开头），末尾单独开测。
+2. **代价型构筑卡**（卡池 10 → 15 张，都是"改变打法"而不是"把数字调大"）：
+   - **孤注一掷**：体力上限 ×0.6，收益 ×1.8（`stamina_max_multiplier`，重开时必须先清它再算上限，否则代价跨局累积）
+   - **玻璃猎人**：玻璃猪 ×3、其余 ×0.7（`type_value_bonus` / `type_value_penalty`）
+   - **断臂求生**：轻锤伤害归零、重锤伤害 ×2（与蓄力系统咬合；轻锤命中弹「轻锤无效」反馈，防止玩家以为判定坏了）
+   - **透支信用**：立刻 +¥200，多一张 ¥150 账单（`overdraft_cash` / `overdraft_bill` 可配）
+   - **守财奴**：每还一张账单永久收益 +5%（`pay_greed_per_pay`，钩子在 `pay_bill`）
+   - 一次性改造类（前三种）不会重复出卡：`make_card_offers` 末尾按当前状态过滤。
+3. **测试**：156 → **183 断言**（考核触发/绑定/上限、赢=免掉绑定账单、输=当场逾期、五张新卡各自的效果、重开还原、一次性卡不重复）。
+4. 截图验证：考核面板与新卡排版（`tests/shot_p1.gd` 已加 challenge / card_new 两态）。
+
+---
+
 ## 8.6 第五轮：蓄力重锤与暴击（从 qiaozhu-main 主干合并，2026-11-15）
 
 qiaozhu-main（11月10日的另一条开发线）在操作层做了手感重构，本轮把其中**蓄力重锤 + 暴击 + 输入缓冲**三件移植进本工程（本工程保留 AI 素材、快速还账条、债务日历与协同效果；qiaozhu 的假硬币、庄家的手、asset_total 胜利判定**未**移植 —— 它们和经济模型耦合太深，另议）。

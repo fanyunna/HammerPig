@@ -83,6 +83,10 @@ var charge_t := 0.0 # 已经蓄了多久
 var charge_pig := -1 # 按下那一刻瞄准的猪（松手时它没跑远就还砸它）
 var pending_strike: Dictionary = {} # 冷却期间按下的那一锤：冷却一结束立刻补上，不静默丢点击
 var pending_t := 0.0
+var pending_challenge: Dictionary = {} # 日历刚撞到期、等这一帧收尾就弹的账单考核
+var challenge_count := 0 # 本局已触发的账单考核次数（上限见 bills.json 的 challenge_max_per_run）
+var challenge_bill_tag := "" # 本次考核绑定的账单编号；空 = 不绑账单（老式通用考核）
+var challenge_label := "" # 考核面板上那句"谁到期了、多少钱"
 var swing := 0.0
 const BillManagerScript := preload("res://scripts/bill_manager.gd")
 const Hammer3DScript := preload("res://scripts/hammer3d.gd")
@@ -104,6 +108,13 @@ var combo_bonus_per_hit := 0
 var hammer_reach_multiplier := 1.0
 var hammer_cooldown_reduction := 0.0
 var stamina_regen_bonus := 0.0
+# --- 代价型构筑卡：改变打法，而不是只把数字调大 ---
+var stamina_max_multiplier := 1.0 # 孤注一掷：体力上限倍率（0.6）
+var type_value_bonus: Dictionary = {} # 玻璃猎人：猪种 id → 收益倍率（{"glass": 3.0}）
+var type_value_penalty := 1.0 # 玻璃猎人：没被点名的猪种收益倍率（0.7）
+var light_hammer_off := false # 断臂求生：轻锤不再出伤害
+var heavy_hammer_multiplier := 1.0 # 断臂求生：重锤伤害倍率（2.0）
+var pay_greed_per_pay := 0.0 # 守财奴：每还掉一张账单，永久收益 +这么多
 var pig_size_multiplier := 1.0
 var pig_population_doubled := false
 var card_pop := 0.0 # 卡片弹出动画的计时（0 → 0.16 秒内放大到位）
@@ -272,23 +283,39 @@ func format_game_date(day_number: int) -> String:
 	return str(month) + "月" + str(day) + "日"
 
 
+## 把一张账单正式标成逾期，并给它挂一张滞纳金。
+## 日历推进和考核失败两个入口共用这一处 —— 两段各写一遍迟早会漏掉其中一条。
+func mark_bill_overdue(bill: Dictionary) -> void:
+	bill.overdue = true
+	var tag := BillManagerScript.tag_of(bill)
+	bills.append({"name": "逾期滞纳金", "amount": int(bill_data.get("calendar_late_fee", 12)),
+		"no": String(bill.get("no", "")), "due": format_game_date(game_day),
+		"source": tag, "fee_kind": "calendar_late"})
+	popups.append({"position": Vector2(780, 300), "life": 1.5, "text": String(bill.name) + " 已逾期 · 滞纳 ¥" + str(int(bill_data.get("calendar_late_fee", 12)))})
+	Sound.play("stamp", 0.75)
+
+
 func advance_calendar() -> void:
-	# 每收入 ¥30 推进一天；时间跟着玩家的游戏进度走，不依赖现实等待。
+	# 每收入 ¥135 推进一天；时间跟着玩家的游戏进度走，不依赖现实等待。
 	var income_per_day := maxf(1.0, float(bill_data.get("income_per_game_day", 30)))
 	var target_day := 1 + int(earned_total / income_per_day)
+	var challenge_cap := int(bill_data.get("challenge_max_per_run", 3))
 	while game_day < target_day:
 		game_day += 1
 		for i in range(bills.size()):
 			var bill: Dictionary = bills[i]
 			if bool(bill.get("overdue", false)) or int(bill.get("due_day", 9999)) > game_day:
 				continue
-			bill.overdue = true
-			var tag := BillManagerScript.tag_of(bill)
-			bills.append({"name": "逾期滞纳金", "amount": int(bill_data.get("calendar_late_fee", 12)),
-				"no": String(bill.get("no", "")), "due": format_game_date(game_day),
-				"source": tag, "fee_kind": "calendar_late"})
-			popups.append({"position": Vector2(780, 300), "life": 1.5, "text": String(bill.name) + " 已逾期 · 滞纳 ¥" + str(int(bill_data.get("calendar_late_fee", 12)))})
-			Sound.play("stamp", 0.75)
+			# 到期不再是"默默盖个章"：先给一次催缴考核，这是整局里唯一会打断砸猪节奏的事。
+			# 一局最多 challenge_cap 次 —— 再多就成了频繁打断，反而更烦。
+			var bill_tag := String(BillManagerScript.tag_of(bill))
+			if phase == "playing" and pending_challenge.is_empty() \
+					and challenge_count < challenge_cap and not bill_tag.is_empty():
+				pending_challenge = {"tag": bill_tag,
+					"kind": "dodge" if int(bill.amount) >= 300 else "collect"}
+				challenge_count += 1
+				continue # 先别判逾期：玩家还有一次机会
+			mark_bill_overdue(bill)
 	if bills.size() > 0:
 		bills_fx.sync(bills)
 		sort_bills()
@@ -446,6 +473,11 @@ func pay_bill(index: int) -> void:
 		if not still_active:
 			tail += " · 解除「" + String(old_rule.get("name", "账单联动")) + "」"
 	popups.append({"position": Vector2(780, 300), "life": 1.3, "text": "已还" + String(b.name) + " -¥" + str(due_amount) + tail})
+	if pay_greed_per_pay > 0.0:
+		# 守财奴：每还掉一张账单，往后每一锤都更值钱 —— 把"还债"从纯支出变成投资。
+		earnings_multiplier += pay_greed_per_pay
+		popups.append({"position": Vector2(780, 336), "life": 1.3,
+			"text": "守财奴 · 收益 +" + str(int(round(pay_greed_per_pay * 100))) + "%"})
 	quick_paid_text = "已付 · " + String(b.name) + tail
 	quick_paid_timer = 1.6
 	Sound.play("cash", 0.85) # 交出去的钱也是钱的一声，比赚到低一点
@@ -880,7 +912,14 @@ func reset_game() -> void:
 	roll_bills() # 里面会 bills_fx.reset() 并按新账单重建效果来源
 	score = meta_starting_cash()
 	last_observed_score = score
-	settings["stamina_max"] = base_stamina_max + (10.0 if meta_unlocked.has("deep_pockets") else 0.0)
+	# 代价型卡的加成必须在算体力上限之前清掉：否则"孤注一掷"会把上限一路压低到下一局。
+	stamina_max_multiplier = 1.0
+	type_value_bonus.clear()
+	type_value_penalty = 1.0
+	light_hammer_off = false
+	heavy_hammer_multiplier = 1.0
+	pay_greed_per_pay = 0.0
+	settings["stamina_max"] = maxi(20, int(round((base_stamina_max + (10.0 if meta_unlocked.has("deep_pockets") else 0.0)) * stamina_max_multiplier)))
 	# 第一张卡要来得晚一点（card_first_at）：开局这段必须是"砸 → 爆钱 → 砸"的连续反馈，
 	# 把对外服务的教学/抉择留到玩家已经上手之后。之后每张按 card_interval 间隔。
 	next_card = int(settings.get("card_first_at", settings.get("card_interval", 50)))
@@ -893,6 +932,10 @@ func reset_game() -> void:
 	charge_pig = -1
 	pending_strike = {}
 	pending_t = 0.0
+	pending_challenge = {}
+	challenge_count = 0
+	challenge_bill_tag = ""
+	challenge_label = ""
 	hammer_damage_bonus = 0
 	stamina_cost_reduction = 0.0
 	earnings_multiplier = 1.0
@@ -977,6 +1020,10 @@ func _process(delta: float) -> void:
 		earned_total += score - last_observed_score
 	last_observed_score = score
 	advance_calendar()
+	if not pending_challenge.is_empty() and phase == "playing":
+		start_bill_challenge()
+		queue_redraw()
+		return
 	if phase == "playing": # 结束了就不再催收
 		bills_fx.update_collection(delta, float(earned_total))
 	if update_gamble(delta): # 抛硬币翻面/落定时整局暂停：猪不走、卡不计时
@@ -1346,7 +1393,15 @@ func strike(point: Vector2, power := 1.0) -> void:
 				hit_damage += 1 # 蓄满的重锤多打一血：这是它值得慢半秒的理由
 			if hammer_damage_bonus > 0 and combo_count >= 3:
 				hit_damage += 1 # 重锤 + 连击：連击热度达到 3 后再加一伤害
+			if light_hammer_off:
+				# 断臂求生：轻锤完全出不了伤害，想砸碎任何东西都必须蓄满。
+				# 连击照样计数（你确实打中了），只是这一下不疼。
+				hit_damage = int(round(float(hit_damage) * heavy_hammer_multiplier)) if power >= 1.30 else 0
 			pig.hp -= hit_damage
+			if hit_damage <= 0:
+				# 断臂求生：打中了却没掉血，必须给一句反馈，否则玩家会以为判定坏了
+				popups.append({"position": point + Vector2(-30, -58), "life": 0.55,
+					"text": "轻锤无效", "color": Color("#9a8f80"), "size": 18})
 			impact_position = point
 			impact_timer = 0.18
 			impact_broken = pig.hp <= 0
@@ -1368,7 +1423,9 @@ func strike(point: Vector2, power := 1.0) -> void:
 				var gain := pig_value(pig.type)
 				var crit := false # 这一锤有没有暴击：只放大正收益，绝不放大黑猪的亏损
 				if gain > 0:
-					gain = roundi(float(gain) * earnings_multiplier * power)
+					# 玻璃猎人：点名的猪种翻倍、其余打折 —— 这一局你要盯着某一类猪砸。
+					var type_mul := float(type_value_bonus.get(kind, type_value_penalty))
+					gain = roundi(float(gain) * earnings_multiplier * power * type_mul)
 					if combo_count > 1:
 						gain += (combo_count - 1) * combo_bonus_per_hit
 						if earnings_multiplier > 1.0:
@@ -1508,10 +1565,23 @@ func make_card_offers() -> Array[Dictionary]:
 		{"id":"stamina", "name":"体力扩容", "desc":"体力上限 +30，并恢复 45 点", "icon":"♥", "color":"#f472b6"},
 		{"id":"coffee", "name":"慢燃咖啡", "desc":"自然恢复速度 +0.15 / 秒", "icon":"☕", "color":"#d99b70"},
 		{"id":"double", "name":"双倍收益", "desc":"接下来 15 秒敲猪收益翻倍", "icon":"×2", "color":"#ffd166"},
-		{"id":"cash", "name":"现金奖励", "desc":"立即获得 ¥" + str(int(settings.get("reward_card_amount", 35))), "icon":"＋", "color":"#efbc72"}
+		{"id":"cash", "name":"现金奖励", "desc":"立即获得 ¥" + str(int(settings.get("reward_card_amount", 35))), "icon":"＋", "color":"#efbc72"},
+		# --- 代价型：不是把数字调大，而是改变这一局的打法 ---
+		{"id":"allin", "name":"孤注一掷", "desc":"体力上限 -40%，敲猪收益 +80%", "icon":"!", "color":"#e0503f"},
+		{"id":"glasshunter", "name":"玻璃猎人", "desc":"玻璃猪收益 ×3，其余猪种 -30%", "icon":"◆", "color":"#7fa8b4"},
+		{"id":"onehand", "name":"断臂求生", "desc":"轻锤不再造成伤害，重锤伤害 ×2", "icon":"✂", "color":"#b06b8a"},
+		{"id":"overdraft", "name":"透支信用", "desc":"立刻 +¥200，但多一张 ¥150 的账单", "icon":"▤", "color":"#d99b70"},
+		{"id":"miser", "name":"守财奴", "desc":"每还掉一张账单，永久收益 +5%", "icon":"◈", "color":"#8fbf7a"}
 	]
 	if not pig_population_doubled:
 		pool.append({"id":"herd", "name":"猪群翻倍", "desc":"桌上存钱罐数量翻倍，整体缩小", "icon":"×2", "color":"#69b88e"})
+	# 一次性改造类不重复出：再抽到一次会把代价叠成死局（体力上限 ×0.6 两次 = 一局只够挥几锤）。
+	for i in range(pool.size() - 1, -1, -1):
+		var cid := String(pool[i].id)
+		if (cid == "allin" and stamina_max_multiplier < 1.0) \
+				or (cid == "glasshunter" and not type_value_bonus.is_empty()) \
+				or (cid == "onehand" and light_hammer_off):
+			pool.remove_at(i)
 	for card in pool:
 		if String(card.id) == "heavy" and combo_bonus_per_hit > 0:
 			card.desc = "已有连击联动：连击达到 3 层后再 +1 伤害"
@@ -1602,6 +1672,29 @@ func apply_card(choice := -1) -> void:
 			"cash":
 				score += int(settings.get("reward_card_amount", 20))
 				Sound.play("cash")
+			"allin":
+				# 体力上限砍到六成，收益直接 ×1.8：一局能挥的锤数变少，但每一锤都值钱得多。
+				stamina_max_multiplier *= 0.6
+				settings["stamina_max"] = maxi(20, int(round(float(settings.get("stamina_max", 100)) * 0.6)))
+				stamina = minf(stamina, float(settings.get("stamina_max", 20)))
+				earnings_multiplier *= 1.8
+			"glasshunter":
+				# 从这一刻起，桌上只有玻璃猪值得砸。别的猪照砸不误，只是不值钱。
+				type_value_bonus = {"glass": 3.0}
+				type_value_penalty = 0.7
+			"onehand":
+				light_hammer_off = true
+				heavy_hammer_multiplier = 2.0
+			"overdraft":
+				var debt_amount := int(settings.get("overdraft_bill", 150))
+				score += int(settings.get("overdraft_cash", 200))
+				bills.append({"name": "信用卡透支", "amount": debt_amount,
+					"no": "OD" + str(game_day), "due": format_game_date(game_day + 3), "due_day": game_day + 3})
+				bills_fx.sync(bills)
+				sort_bills()
+				Sound.play("cash")
+			"miser":
+				pay_greed_per_pay += 0.05
 		popups.append({"position": Vector2(640, 420), "life": 1.5, "text": String(offer.name) + " 已生效"})
 		card_offers.clear()
 		phase = "playing"
@@ -1618,6 +1711,44 @@ func apply_card(choice := -1) -> void:
 		phase = "playing"
 	else:
 		start_challenge()
+
+## 账单到期考核：接住 advance_calendar 挂上的那一次机会。
+## 小额账单考「凑钱」，大额账单（房租、车险这种）考「躲催债」—— 越贵的账，催得越凶。
+func start_bill_challenge() -> void:
+	if pending_challenge.is_empty():
+		return
+	challenge_bill_tag = String(pending_challenge.get("tag", ""))
+	var kind := String(pending_challenge.get("kind", "collect"))
+	pending_challenge = {}
+	card_type = kind
+	# 记住是哪张账单在催：玩家的第一反应一定是"谁到期了、多少钱"
+	challenge_label = ""
+	for bill in bills:
+		if String(BillManagerScript.tag_of(bill)) == challenge_bill_tag:
+			challenge_label = String(bill.name) + " ¥" + str(int(bill.amount))
+			break
+	start_challenge()
+	Sound.play("stamp", 0.9)
+
+
+## 按编号清掉一张账单（考核成功时用）：它带出来的利息单、滞纳单也一起作废。
+func clear_bill_by_tag(tag: String) -> bool:
+	if tag.is_empty():
+		return false
+	for i in range(bills.size()):
+		if String(BillManagerScript.tag_of(bills[i])) != tag:
+			continue
+		bills.remove_at(i)
+		for j in range(bills.size() - 1, -1, -1): # 倒着删，免得删完后面的下标全乱
+			if String(bills[j].get("source", "")) == tag:
+				bills.remove_at(j)
+		paid_count += 1
+		bills_fx.sync(bills)
+		sort_bills()
+		clamp_bill_page()
+		return true
+	return false
+
 
 func start_challenge() -> void:
 	phase = "challenge"
@@ -1636,10 +1767,15 @@ func start_challenge() -> void:
 func finish_challenge(success: bool) -> void:
 	coins.clear()
 	dodgers.clear()
+	var bound_tag := challenge_bill_tag
+	challenge_bill_tag = ""
+	challenge_label = ""
 	if success:
 		var reward := int(settings.bill_reward)
 		score += reward
-		clear_cheapest_bill() # 通关 = 付掉列表里最便宜的一张
+		# 绑定了账单（到期催缴）：赢的是这张账的免单；没绑定（老式考核）就清最便宜的一张。
+		if not clear_bill_by_tag(bound_tag):
+			clear_cheapest_bill()
 		popups.append({"position": Vector2(640, 420), "life": 1.4, "text": "付清 +¥" + str(reward)})
 		phase = "playing"
 		Sound.play("cash", 1.05)
@@ -1647,6 +1783,13 @@ func finish_challenge(success: bool) -> void:
 		score -= bill_amount
 		add_interest_bills() # 信用卡：每张没还的卡追加一笔利息（只此一处，不会重复计）
 		add_overdue_bill() # 逾期：账单不但没消掉，还多出一张滞纳单
+		# 到期催缴考砸了：这张账单当场正式逾期，不再等下一天日历再补一刀。
+		# 不额外挂滞纳金 —— add_overdue_bill() 刚加的那张就是它的罚单。
+		if not bound_tag.is_empty():
+			for i in range(bills.size()):
+				if String(BillManagerScript.tag_of(bills[i])) == bound_tag:
+					bills[i]["overdue"] = true
+					break
 		Sound.play("stamp") # 盖章：一记实心闷击，比任何一行提示都直接
 		if score <= 0:
 			score = 0
@@ -2682,7 +2825,7 @@ func draw_upgrade_choices() -> void:
 
 func draw_collect() -> void:
 	panel(Rect2(40, 120, 1200, 560), Color("#1b2838"), 22)
-	text_at("账单到期 · 限时凑钱", Vector2(80, 170), 30, Color("#efbc72"))
+	text_at("账单到期 · 限时凑钱" + ("　" + challenge_label if challenge_label != "" else ""), Vector2(80, 170), 30, Color("#efbc72"))
 	text_at("应付 ¥" + str(bill_amount) + "      已凑 ¥" + str(collected), Vector2(80, 222), 24)
 	text_at("剩余 " + ("%.1f" % maxf(0.0, bill_timer)) + " 秒", Vector2(80, 262), 22, Color("#c9b08a"))
 	panel(Rect2(80, 296, 800, 16), Color("#171a21"), 6)
@@ -2706,7 +2849,7 @@ func draw_coin(c: Dictionary) -> void:
 
 func draw_dodge() -> void:
 	panel(Rect2(40, 120, 1200, 560), Color("#1b2838"), 22)
-	text_at("账单到期 · 躲开催债", Vector2(80, 170), 30, Color("#efbc72"))
+	text_at("账单到期 · 躲开催债" + ("　" + challenge_label if challenge_label != "" else ""), Vector2(80, 170), 30, Color("#efbc72"))
 	text_at("应付 ¥" + str(bill_amount) + "      坚持到时间结束", Vector2(80, 222), 24)
 	text_at("剩余 " + ("%.1f" % maxf(0.0, bill_timer)) + " 秒", Vector2(80, 262), 22, Color("#c9b08a"))
 	panel(Rect2(80, 296, 800, 16), Color("#171a21"), 6)

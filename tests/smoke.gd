@@ -29,6 +29,15 @@ func key_press(code) -> void:
     game._unhandled_input(key)
 
 
+## 造三张卡，第一张是指定的那张：apply_card 只认"正好三张"的牌面
+func offers_with(first_id: String, first_name: String) -> Array[Dictionary]:
+    return [
+        {"id": first_id, "name": first_name, "desc": "测试", "icon": "?", "color": "#ffffff"},
+        {"id": "cash", "name": "现金奖励", "desc": "测试", "icon": "+", "color": "#ffffff"},
+        {"id": "heavy", "name": "重锤改造", "desc": "测试", "icon": "?", "color": "#ffffff"},
+    ]
+
+
 ## P1 辅助：数一数桌上还有几张叫这个名字的账单
 func _count_named(nm: String) -> int:
     var n := 0
@@ -74,6 +83,8 @@ func run() -> void:
     game.settings["pig_types"] = []
     # 冷却缓冲会把"被冷却挡住的那一锤"记下来补发：老断言不指望它，先关掉，文件末尾单独开测。
     game.settings["strike_buffer"] = 0.0
+    # 账单到期考核会打断砸猪、把 phase 切成 challenge：老断言不指望它，先关掉，文件末尾单独开测。
+    game.bill_data["challenge_max_per_run"] = 0
     game.settings["crit_base_chance"] = 0.0
     game.settings["crit_per_combo"] = 0.0
     game.settings["crit_max_chance"] = 0.0
@@ -829,6 +840,187 @@ func run() -> void:
     game._process(0.05)
     check(game.pending_strike.is_empty(), "a buffered click that waits too long is dropped")
     game.settings["strike_buffer"] = 0.0
+
+    # ================= A：账单到期考核 =================
+    # 到期不再默默盖章，而是先给一次「凑钱 / 躲催债」的机会。
+    key_press(KEY_R)
+    game.bill_data["challenge_max_per_run"] = 3
+    game.next_card = 999999
+    game.gamble_used = true
+    game.settings["pig_types"] = []
+    game.challenge_count = 0
+    game.pending_challenge = {}
+    game.score = 800
+    # 把最便宜的一张账单的到期日拉到今天，再把收入推过一天的门槛
+    game.bills[0]["due_day"] = game.game_day
+    var income_day := float(game.bill_data["income_per_game_day"])
+    game.earned_total = income_day * 2.0
+    game._process(0.016)
+    check(game.phase == "challenge", "a bill falling due opens a payment challenge instead of silently stamping it")
+    check(not game.challenge_bill_tag.is_empty(), "the challenge is bound to the bill that came due")
+    check(game.challenge_count == 1, "the challenge counter goes up exactly once")
+    check(not game.challenge_label.is_empty(), "the challenge panel knows which bill is being chased")
+
+    # 赢了：付掉的是「被催的那一张」，不是最便宜的那一张
+    var bills_before_win: int = game.bills.size()
+    game.finish_challenge(true)
+    check(game.phase == "playing", "clearing the challenge resumes play")
+    check(game.bills.size() == bills_before_win - 1, "winning pays off exactly one bill")
+    check(game.challenge_bill_tag.is_empty(), "the bound bill is released after settlement")
+
+    # 输了：账单当场逾期，钱照扣
+    game.bills.sort_custom(func(a, b): return int(a.get("due_day", 9999)) < int(b.get("due_day", 9999)))
+    game.bills[0]["due_day"] = game.game_day
+    game.pending_challenge = {}
+    game.earned_total += income_day
+    game._process(0.016)
+    check(game.phase == "challenge", "the next due bill opens another challenge")
+    var overdue_before := 0
+    for b in game.bills:
+        if bool(b.get("overdue", false)):
+            overdue_before += 1
+    var score_before_loss: int = game.score
+    game.finish_challenge(false)
+    var overdue_after := 0
+    for b in game.bills:
+        if bool(b.get("overdue", false)):
+            overdue_after += 1
+    check(overdue_after == overdue_before + 1, "losing stamps the due bill as overdue right away")
+    check(game.score == score_before_loss - int(game.settings.bill_amount), "losing still costs the penalty")
+
+    # 一局有上限：超出上限就退回原来的「直接盖章」
+    game.challenge_count = 3
+    game.bills.sort_custom(func(a, b): return int(a.get("due_day", 9999)) < int(b.get("due_day", 9999)))
+    game.bills[0]["due_day"] = game.game_day
+    game.pending_challenge = {}
+    game.earned_total += income_day
+    game._process(0.016)
+    check(game.phase == "playing" and game.pending_challenge.is_empty(),
+        "no more challenges once the per-run cap is reached")
+    game.bill_data["challenge_max_per_run"] = 0
+
+    # ================= B：代价型构筑卡 =================
+    # 孤注一掷：体力上限砍四成，收益 ×1.8
+    key_press(KEY_R)
+    game.next_card = 999999
+    game.gamble_used = true
+    game.settings["pig_types"] = []
+    var cap_before: int = int(game.settings["stamina_max"])
+    game.phase = "card"
+    game.card_type = "reward"
+    game.card_offers = offers_with("allin", "孤注一掷")
+    game.apply_card(0)
+    check(is_equal_approx(game.stamina_max_multiplier, 0.6), "all-in trades stamina capacity for payout")
+    check(int(game.settings["stamina_max"]) == maxi(20, int(round(float(cap_before) * 0.6))),
+        "all-in lowers the stamina ceiling itself, not just the bar")
+    check(is_equal_approx(game.earnings_multiplier, 1.8), "all-in pays almost double per pig")
+    # 重开必须把上限还回去，不能把代价带进下一局
+    key_press(KEY_R)
+    check(is_equal_approx(game.stamina_max_multiplier, 1.0) and int(game.settings["stamina_max"]) >= 20,
+        "a new run undoes all-in")
+
+    # 玻璃猎人：玻璃猪 ×3，其余 ×0.7
+    key_press(KEY_R)
+    game.next_card = 999999
+    game.gamble_used = true
+    game.settings["pig_types"] = []
+    game.pending_strike = {}
+    game.pending_t = 0.0
+    game.phase = "card"
+    game.card_type = "reward"
+    game.card_offers = offers_with("glasshunter", "玻璃猎人")
+    game.apply_card(0)
+    check(float(game.type_value_bonus.get("glass", 0.0)) == 3.0, "the glass hunter triples glass pigs")
+    check(is_equal_approx(game.type_value_penalty, 0.7), "and docks every other breed by 30%")
+    game.phase = "playing"
+    game.score = 0
+    game.combo_count = 0
+    game.combo_timer = 0.0
+    game.pigs[0]["type"] = {"id": "glass", "label": "玻璃猪", "hp": 1, "value": 10, "scale": 1.0}
+    game.pigs[0]["hp"] = 1
+    game.pigs[0]["max_hp"] = 1
+    game.cooldown = 0.0
+    game.strike(game.pigs[0]["position"])
+    check(game.score == 30, "a glass pig now pays triple")
+    game.pigs[0]["type"] = {"id": "piggy", "label": "牛仔猪", "hp": 1, "value": 10, "scale": 1.0}
+    game.pigs[0]["hp"] = 1
+    game.pigs[0]["max_hp"] = 1
+    game.score = 0
+    game.cooldown = 0.0
+    game.pending_strike = {}
+    game.pending_t = 0.0
+    game.strike(game.pigs[0]["position"])
+    check(game.score == 7, "an ordinary pig now pays 70%")
+
+    # 断臂求生：轻锤零伤害，重锤翻倍
+    key_press(KEY_R)
+    game.next_card = 999999
+    game.gamble_used = true
+    game.settings["pig_types"] = []
+    game.pending_strike = {}
+    game.pending_t = 0.0
+    game.phase = "card"
+    game.card_type = "reward"
+    game.card_offers = offers_with("onehand", "断臂求生")
+    game.apply_card(0)
+    check(game.light_hammer_off and is_equal_approx(game.heavy_hammer_multiplier, 2.0),
+        "one-hand mode kills light taps and doubles heavy blows")
+    game.phase = "playing"
+    game.pigs[0]["type"] = {"id": "fat", "label": "胖警长", "hp": 4, "value": 10, "scale": 1.0}
+    game.pigs[0]["hp"] = 4
+    game.pigs[0]["max_hp"] = 4
+    game.combo_count = 0
+    game.cooldown = 0.0
+    game.strike(game.pigs[0]["position"], 1.0)
+    check(int(game.pigs[0]["hp"]) == 4, "a light tap does nothing at all with one arm")
+    game.cooldown = 0.0
+    game.pending_strike = {}
+    game.pending_t = 0.0
+    game.strike(game.pigs[0]["position"], 1.5)
+    check(int(game.pigs[0]["hp"]) == 0, "a heavy blow hits for double")
+
+    # 透支信用：现在拿钱，立刻多一张账单
+    key_press(KEY_R)
+    game.next_card = 999999
+    game.gamble_used = true
+    game.settings["pig_types"] = []
+    var bills_before_od: int = game.bills.size()
+    var score_before_od: int = game.score
+    game.phase = "card"
+    game.card_type = "reward"
+    game.card_offers = offers_with("overdraft", "透支信用")
+    game.apply_card(0)
+    check(game.score == score_before_od + int(game.settings.get("overdraft_cash", 200)),
+        "overdraft hands the cash over up front")
+    check(game.bills.size() == bills_before_od + 1, "and a new bill appears right away")
+
+    # 守财奴：每还一张账单，往后每一锤更值钱
+    key_press(KEY_R)
+    game.next_card = 999999
+    game.gamble_used = true
+    game.settings["pig_types"] = []
+    game.phase = "card"
+    game.card_type = "reward"
+    game.card_offers = offers_with("miser", "守财奴")
+    game.apply_card(0)
+    check(is_equal_approx(game.pay_greed_per_pay, 0.05), "the miser turns every payment into a raise")
+    game.phase = "playing"
+    game.score = 5000
+    var em_before: float = game.earnings_multiplier
+    game.pay_bill(0)
+    check(is_equal_approx(game.earnings_multiplier, em_before + 0.05),
+        "paying a bill raises every future payout")
+
+    # 一次性改造不会抽到第二次
+    game.stamina_max_multiplier = 0.6
+    game.light_hammer_off = true
+    game.type_value_bonus = {"glass": 3.0}
+    var seen_ids := {}
+    for i in range(60):
+        for card in game.make_card_offers():
+            seen_ids[String(card.id)] = true
+    check(not seen_ids.has("allin") and not seen_ids.has("onehand") and not seen_ids.has("glasshunter"),
+        "one-off remodel cards are never offered again")
 
     print("ALL ", checks, " CHECKS PASSED")
     game.queue_free() # 音效在 Sound 这个 autoload 里，不随场景释放，不用等它放完

@@ -63,4 +63,30 @@ func run() -> void:
 	game.phase = "playing"
 	game.bill_open = true
 	await snap("tmp_p1_ledger.png")
+
+	# 账单到期考核：凑钱小游戏（检查标题里的账单名 + 面板排版）
+	game.bill_open = false
+	game.phase = "playing"
+	print("STEP challenge")
+	game.card_type = "collect"
+	game.bill_amount = 80
+	game.start_challenge()
+	game.collected = 35
+	game.coins.clear()
+	game.coins.append({"position": Vector2(320, 430), "velocity": Vector2.ZERO, "value": 5, "fake": false, "life": 5.0})
+	game.coins.append({"position": Vector2(520, 500), "velocity": Vector2.ZERO, "value": 5, "fake": false, "life": 5.0})
+	game.coins.append({"position": Vector2(760, 420), "velocity": Vector2.ZERO, "value": 5, "fake": false, "life": 5.0})
+	game.coins.append({"position": Vector2(940, 520), "velocity": Vector2.ZERO, "value": -5, "fake": true, "life": 5.0})
+	game.challenge_label = "房租 ¥560"
+	await snap("tmp_p1_challenge.png")
+
+	# 代价型新卡：描述比老卡长，检查会不会溢出卡片
+	print("STEP card")
+	game.phase = "card"
+	game.card_type = "reward"
+	game.card_offers.clear()
+	game.card_offers.append({"id": "onehand", "name": "断臂求生", "desc": "轻锤不再造成伤害，重锤伤害 ×2", "icon": "✂", "color": "#b06b8a"})
+	game.card_offers.append({"id": "glasshunter", "name": "玻璃猎人", "desc": "玻璃猪收益 ×3，其余猪种 -30%", "icon": "◆", "color": "#7fa8b4"})
+	game.card_offers.append({"id": "allin", "name": "孤注一掷", "desc": "体力上限 -40%，敲猪收益 +80%", "icon": "!", "color": "#e0503f"})
+	await snap("tmp_p1_card_new.png")
 	quit()

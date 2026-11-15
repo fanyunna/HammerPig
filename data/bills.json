@@ -4,6 +4,7 @@
   "first_due_min_days": 4,
   "first_due_max_days": 16,
   "calendar_late_fee": 12,
+  "challenge_max_per_run": 3,
   "pay_stamina_bonus": 18,
   "overdue_label": "已逾期",
   "unpaid_stamp": "未付",
