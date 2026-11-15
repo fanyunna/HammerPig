@@ -9,9 +9,20 @@ const DEFINITIONS = {
 	"tax": ["贪婪税", "代价", ["收益 +35% / 每30秒新增账单"]],
 	"berserker": ["狂战士训练", "任务", ["命中15/30/50次自动成长", "攻速 +10%", "每10次命中狂暴4秒", "狂暴体力消耗 -30%"]],
 	"hunter": ["猎猪执照", "任务", ["击碎10/25/50/100只成长", "收益 +10%", "收益 +20%", "收益 +30% / 百只奖励 ¥40"]],
-	"broker": ["债务操盘手", "任务", ["还清1/2/3/5张成长", "每次还款额外恢复3体力", "每次还款额外恢复6体力", "每次还款额外恢复9体力"]]
+	"broker": ["债务操盘手", "任务", ["还清1/2/3/5张成长", "每次还款额外恢复3体力", "每次还款额外恢复6体力", "每次还款额外恢复9体力"]],
+	"loan": ["酒馆赊账", "代价", ["立得 ¥45；挥锤冷却 +15%"]],
+	"insurance": ["破罐保险", "代价", ["正收益 −10%；每三次空挥返 2 体力"]],
+	"focus": ["校准锤", "进化", ["空挥后，下次命中 +1 伤害", "蓄力伤害累计 +2", "蓄力命中返 2 体力", "蓄力命中再额外 +1 伤害"]],
+	"spurs": ["赶路马刺", "进化", ["至少 3 连击时冷却 −10%", "至少 3 连击时冷却 −15%", "至少 3 连击时冷却 −20%", "至少 3 连击时冷却 −25%"]],
+	"collector": ["收据收藏家", "任务", ["还清 1/3/5 张账单自动成长", "每次还账返 ¥2", "每次还账返 ¥4", "每次还账返 ¥6"]],
+	"steadiness": ["稳手学徒", "任务", ["打出 2/4/6 组五连击成长", "挥锤体力减 0.25", "挥锤体力累计减 0.5", "挥锤体力累计减 0.75"]]
 }
-const GOALS = {"berserker": [15, 30, 50], "hunter": [10, 25, 50, 100], "broker": [1, 2, 3, 5]}
+const GOALS = {
+	"berserker": [15, 30, 50], "hunter": [10, 25, 50, 100], "broker": [1, 2, 3, 5],
+	"collector": [1, 3, 5], "steadiness": [2, 4, 6]
+}
+var insurance_misses := 0
+var focus_armed := false
 var panel_open := false
 var levels: Dictionary = {}
 var counts: Dictionary = {}
@@ -25,6 +36,8 @@ var final_paid: Dictionary = {}
 
 
 func reset() -> void:
+	insurance_misses = 0
+	focus_armed = false
 	panel_open = false
 	levels.clear()
 	counts.clear()
@@ -87,6 +100,8 @@ func acquire(id: String, game) -> void:
 	if id == "devil":
 		game.settings["stamina_max"] = maxf(20.0, float(game.settings.stamina_max) * 0.8)
 		game.stamina = minf(game.stamina, float(game.settings.stamina_max))
+	if id == "loan":
+		game.score += 45
 	if GOALS.has(id):
 		counts[id] = 0
 
@@ -97,6 +112,7 @@ func cost(game) -> float:
 		(
 			float(game.settings.get("stamina_cost", 4))
 			- game.stamina_cost_reduction
+			- maxi(0, level("steadiness") - 1) * 0.25
 			+ (1.0 if level("overdrive") > 0 else 0.0)
 		)
 	)
@@ -116,6 +132,11 @@ func cooldown(game) -> float:
 		value *= 0.8
 	if level("berserker") >= 2:
 		value *= 0.9
+	if level("loan") > 0:
+		value *= 1.15
+	var spurs := level("spurs")
+	if spurs > 0 and game.combo_timer > 0.0 and game.combo_count >= 3:
+		value *= 0.95 - spurs * 0.05
 	return maxf(0.08, value)
 
 
@@ -123,9 +144,47 @@ func damage_bonus() -> int:
 	return 1 if rage > 0 else 0
 
 
+func register_miss(game) -> void:
+	if level("focus") > 0:
+		focus_armed = true
+	if level("insurance") == 0:
+		return
+	insurance_misses += 1
+	if insurance_misses == 3:
+		insurance_misses = 0
+		restore_stamina(game, 2.0)
+		notify(game, "破罐保险 · 回体")
+
+
+func consume_focus(game) -> int:
+	if not focus_armed:
+		return 0
+	focus_armed = false
+	var rank := level("focus")
+	if rank >= 3:
+		restore_stamina(game, 2.0)
+	return 3 if rank == 4 else mini(rank, 2)
+
+
+func restore_stamina(game, amount: float) -> void:
+	game.stamina = minf(float(game.settings.stamina_max), game.stamina + amount)
+
+
+func record_payment(game) -> void:
+	progress("broker", game)
+	if level("collector") == 0:
+		return
+	progress("collector", game)
+	var rebate := (level("collector") - 1) * 2
+	if rebate > 0:
+		game.score += rebate
+		notify(game, "收据返现 +¥" + str(rebate))
+
+
 func income_multiplier() -> float:
 	return (
-		(1.4 if level("devil") > 0 else 1.0)
+		(0.9 if level("insurance") > 0 else 1.0)
+		* (1.4 if level("devil") > 0 else 1.0)
 		* (1.35 if level("tax") > 0 else 1.0)
 		* (1.0 + maxf(0.0, level("hunter") - 1) * 0.1)
 	)
@@ -157,8 +216,10 @@ func critical_reward(critical: bool, game) -> void:
 func progress(id: String, game) -> void:
 	if level(id) == 0:
 		return
-	counts[id] = int(counts.get(id, 0)) + 1
 	var goals: Array = GOALS[id]
+	counts[id] = int(counts.get(id, 0)) + 1
+	if id == "collector" or id == "steadiness":
+		counts[id] = mini(int(counts[id]), int(goals.back()))
 	while level(id) < 4 and int(counts[id]) >= int(goals[level(id) - 1]):
 		levels[id] = level(id) + 1
 		notify(game, String(DEFINITIONS[id][0]) + " Lv." + str(level(id)))
@@ -257,6 +318,8 @@ func draw_status(game) -> void:
 	var row := 0
 	for id in levels:
 		var d: Array = DEFINITIONS[id]
+		var column_x := 150 + (row % 2) * 495
+		var row_y := int(row / 2.0) * 62
 		var label := String(d[0]) + " Lv." + str(level(id))
 		if GOALS.has(id):
 			var goals: Array = GOALS[id]
@@ -266,8 +329,8 @@ func draw_status(game) -> void:
 				+ "/"
 				+ str(goals[mini(level(id) - 1, goals.size() - 1)])
 			)
-		game.text_at(label, Vector2(180, 160 + row * 62), 19, Color("#ffd166"))
-		game.text_at(String(d[2][level(id) - 1]), Vector2(180, 183 + row * 62), 15)
+		game.text_at(label, Vector2(column_x, 160 + row_y), 19, Color("#ffd166"))
+		game.text_at(String(d[2][level(id) - 1]), Vector2(column_x, 183 + row_y), 15)
 		row += 1
 	if row == 0:
 		game.text_at("尚未获得成长卡", Vector2(180, 170), 20)
