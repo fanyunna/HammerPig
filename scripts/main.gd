@@ -25,6 +25,10 @@ const PIG3D_SIZE := 138.0 # 3D 猪纹理的绘制边长（基准；实际尺寸�
 const MAX_PARTICLES := 70 # 粒子上限：狂热时一秒连碎好几只，别让金币堆到掉帧
 const PIG3D_OFFSET := Vector2(0, -10) # 纹理中心相对猪身体中心的偏移
 const DESK_RECT := Rect2(110, 260, 1060, 396) # 桌面外框的屏幕矩形（3D 桌板按它反算尺寸）
+## 账单考核浮层：上半屏是 HUD（标题 / 金额 / 计时），下半屏是一整块 3D 舞台。
+## 舞台矩形同时是：3D 视口的像素尺寸、2D 回退的绘制区、金币与催债人的活动边界。
+const CHALLENGE_PANEL := Rect2(40, 118, 1200, 574)
+const CHALLENGE_STAGE := Rect2(56, 300, 1168, 372)
 ## 按住左键蓄力：轻点是快锤（完全等于原来的手感），按满变成重锤 ——
 ## 收益 ×1.5、伤害 +1，但蓄力这半秒猪会跑，砸空还要额外付一次代价。
 const CHARGE_MAX := 0.55
@@ -125,6 +129,7 @@ var bill_timer := 0.0
 var collected := 0
 var coins: Array[Dictionary] = []
 var coin_spawn_timer := 0.0
+var coin_uid := 0 # 金币的身份证号：3D 舞台靠它把"同一枚币"的动画串起来（每帧重算位置不等于重建）
 var double_timer := 0.0
 var combo_count := 0
 var combo_timer := 0.0
@@ -134,6 +139,7 @@ var shake_x := 0.0
 var shake_y := 0.0
 var dodgers: Array[Dictionary] = []
 var dodger_spawn_timer := 0.0
+var dodger_uid := 0
 var dodge_lives := 3
 var invincible_timer := 0.0
 var elapsed := 0.0
@@ -153,6 +159,7 @@ var hammer_tex: Texture2D = null # 握锤的手贴图；null = 用回 3D 锤
 var bg_tex: Texture2D = null # 西部酒馆背景；null = 用回纯色底
 var pig3d: Array[Pig3D] = [] # 每只猪一个 SubViewport（3D）
 var desk3d: Desk3D = null # 3D 木桌背景（全屏 SubViewport）
+var challenge3d: Challenge3D = null # 考核小游戏的 3D 舞台（金币雨 / 催债追捕）
 var use_3d := false # 由 balance.json 的 pig_3d 控制，headless 下强制关闭
 var use_desk_3d := false # 由 balance.json 的 desk_3d 控制（可单独关桌子、保留 3D 猪）
 
@@ -185,6 +192,10 @@ func _ready() -> void:
 			var vp := Pig3D.new()
 			add_child(vp)
 			pig3d.append(vp)
+		if bool(settings.get("challenge_3d", true)):
+			challenge3d = Challenge3D.new()
+			add_child(challenge3d)
+			challenge3d.build(CHALLENGE_STAGE) # 舞台像素 = 屏幕像素，映射不用再算缩放
 	if not DisplayServer.get_name().contains("headless"):
 		hammer3d = Hammer3DScript.new()
 		add_child(hammer3d)
@@ -1113,6 +1124,14 @@ func _process(delta: float) -> void:
 			update_collect(delta)
 		else:
 			update_dodge(delta)
+	# 3D 舞台：只在考核期间活着。结束就关渲染并清场，不给主画面留残影、也不白烧 GPU。
+	if challenge3d != null:
+		if phase == "challenge":
+			challenge3d.set_active(true)
+			challenge3d.sync(coins, dodgers, hammer_position,
+				"collect" if card_type == "collect" else "dodge", invincible_timer)
+		else:
+			challenge3d.set_active(false)
 	for i in range(particles.size() - 1, -1, -1):
 		var p: Dictionary = particles[i]
 		p.life -= delta
@@ -1759,6 +1778,7 @@ func start_challenge() -> void:
 		coins.clear()
 		coin_spawn_timer = 0.0
 	else:
+		coins.clear() # 上一个凑钱关剩下的钱不许带进躲债关：舞台干净地开演
 		dodgers.clear()
 		dodger_spawn_timer = 0.0
 		dodge_lives = int(settings.dodge_lives)
@@ -1805,10 +1825,13 @@ func finish_challenge(success: bool) -> void:
 func spawn_coin() -> void:
 	var fake := randf() < float(settings.coin_fake_chance)
 	var value := -int(settings.coin_value) if fake else int(settings.coin_value)
+	var area := CHALLENGE_STAGE.grow(-44.0) # 别贴着台沿生成：金币要整枚落在光里
+	coin_uid += 1
 	coins.append({
-		"position": Vector2(randf_range(160, 1120), randf_range(300, 620)),
+		"position": Vector2(randf_range(area.position.x, area.end.x), randf_range(area.position.y, area.end.y)),
 		"velocity": Vector2(randf_range(-140, 140), randf_range(-90, 90)),
-		"value": value, "fake": fake, "life": randf_range(2.2, 3.6)
+		"value": value, "fake": fake, "life": randf_range(2.2, 3.6),
+		"vcid": coin_uid, # 3D 舞台靠它认出"还是那枚币"，否则每帧都会被当成新生成的
 	})
 
 func update_collect(delta: float) -> void:
@@ -1819,6 +1842,19 @@ func update_collect(delta: float) -> void:
 	for i in range(coins.size() - 1, -1, -1):
 		var c: Dictionary = coins[i]
 		c.position += c.velocity * delta
+		# 撞台沿就弹回来。以前金币可以飘出面板，在"看不见的地方"继续占着倒计时，
+		# 玩家只能干等 —— 现在它始终在光里弹着，一直有得点。
+		var b := CHALLENGE_STAGE.grow(-28.0)
+		var cp: Vector2 = c.position
+		var cv: Vector2 = c.velocity
+		if cp.x < b.position.x or cp.x > b.end.x:
+			cv.x = -cv.x
+			cp.x = clampf(cp.x, b.position.x, b.end.x)
+		if cp.y < b.position.y or cp.y > b.end.y:
+			cv.y = -cv.y
+			cp.y = clampf(cp.y, b.position.y, b.end.y)
+		c.position = cp
+		c.velocity = cv
 		c.life -= delta
 		if c.life <= 0.0:
 			coins.remove_at(i)
@@ -1857,13 +1893,15 @@ func update_dodge(delta: float) -> void:
 
 func spawn_dodger() -> void:
 	var side := randi() % 4
+	var area := CHALLENGE_STAGE.grow(-30.0)
 	var pos: Vector2
 	match side:
-		0: pos = Vector2(randf_range(80, 1200), 150)
-		1: pos = Vector2(randf_range(80, 1200), 650)
-		2: pos = Vector2(80, randf_range(150, 650))
-		_: pos = Vector2(1200, randf_range(150, 650))
-	dodgers.append({"position": pos, "life": randf_range(6.0, 9.0), "seed": randf() * TAU})
+		0: pos = Vector2(randf_range(area.position.x, area.end.x), area.position.y)
+		1: pos = Vector2(randf_range(area.position.x, area.end.x), area.end.y)
+		2: pos = Vector2(area.position.x, randf_range(area.position.y, area.end.y))
+		_: pos = Vector2(area.end.x, randf_range(area.position.y, area.end.y))
+	dodger_uid += 1
+	dodgers.append({"position": pos, "life": randf_range(6.0, 9.0), "seed": randf() * TAU, "dcid": dodger_uid})
 
 func click_coin(point: Vector2) -> void:
 	for i in range(coins.size() - 1, -1, -1):
@@ -2823,14 +2861,45 @@ func draw_upgrade_choices() -> void:
 		description.draw(get_canvas_item(), Vector2(rect.position.x + 18.0, description_top), Color("#e2e9e4"))
 		text_center("选择 " + str(i + 1), rect.get_center().x, rect.end.y - 22, 16, accent.lightened(0.3))
 
+## 考核浮层的上半屏 HUD。两种玩法只差标题/说明，排版完全一致 ——
+## 玩家第二次遇到账单时不用重新认一遍界面。lives = 0 时不画心（凑钱那关没有命）。
+func draw_challenge_header(title: String, info: String, hint: String, lives: int) -> void:
+	panel(CHALLENGE_PANEL, Color("#1b2838"), 22)
+	var head := "账单到期 · " + title
+	if challenge_label != "":
+		head += "　" + challenge_label
+	text_at(head, Vector2(78, 168), 30, Color("#efbc72"))
+	text_at(info, Vector2(78, 210), 23, Color("#e2d3b4"))
+	text_at(hint, Vector2(78, 242), 18, Color("#9fb2c4"))
+	text_at("剩余 " + ("%.1f" % maxf(0.0, bill_timer)) + " 秒", Vector2(940, 210), 23, Color("#c9b08a"))
+	for i in range(lives):
+		draw_heart(Vector2(1180 - i * 26, 232))
+	panel(Rect2(78, 266, 1124, 14), Color("#141a22"), 7)
+	panel(Rect2(78, 266, 1124 * clampf(bill_timer / bill_time, 0.0, 1.0), 14), Color("#efbc72"), 7)
+
+
+## 把 3D 舞台贴到 CHALLENGE_STAGE，再压一圈圆角内框：3D 视口是方的，
+## 靠这圈和面板同色的粗边把直角藏进圆角里，看起来才像"一扇窗"而不是贴了张图。
+## 返回 false = 这台机器上没有 3D 舞台（headless / challenge_3d:false），调用方走 2D 回退。
+func draw_challenge_stage() -> bool:
+	if challenge3d == null:
+		panel(CHALLENGE_STAGE, Color("#131a24"), 16)
+		return false
+	draw_texture_rect(challenge3d.get_texture(), CHALLENGE_STAGE, false)
+	var frame := StyleBoxFlat.new()
+	frame.bg_color = Color(0, 0, 0, 0)
+	frame.set_corner_radius_all(18)
+	frame.set_border_width_all(10)
+	frame.border_color = Color("#1b2838")
+	draw_style_box(frame, CHALLENGE_STAGE)
+	return true
+
+
 func draw_collect() -> void:
-	panel(Rect2(40, 120, 1200, 560), Color("#1b2838"), 22)
-	text_at("账单到期 · 限时凑钱" + ("　" + challenge_label if challenge_label != "" else ""), Vector2(80, 170), 30, Color("#efbc72"))
-	text_at("应付 ¥" + str(bill_amount) + "      已凑 ¥" + str(collected), Vector2(80, 222), 24)
-	text_at("剩余 " + ("%.1f" % maxf(0.0, bill_timer)) + " 秒", Vector2(80, 262), 22, Color("#c9b08a"))
-	panel(Rect2(80, 296, 800, 16), Color("#171a21"), 6)
-	panel(Rect2(80, 296, 800 * clampf(bill_timer / bill_time, 0.0, 1.0), 16), Color("#efbc72"), 6)
-	text_at("点击金色硬币凑钱 · 别点黑色假币", Vector2(80, 340), 20, Color("#c7d5e0"))
+	draw_challenge_header("限时凑钱", "应付 ¥" + str(bill_amount) + "　　已凑 ¥" + str(collected),
+		"点击金色硬币凑钱 · 黑色的是假币，点了倒扣", 0)
+	if draw_challenge_stage():
+		return
 	for c in coins:
 		draw_coin(c)
 
@@ -2848,16 +2917,10 @@ func draw_coin(c: Dictionary) -> void:
 		text_at("¥", pos + Vector2(-8, 8), 20, Color("#5e3c12"))
 
 func draw_dodge() -> void:
-	panel(Rect2(40, 120, 1200, 560), Color("#1b2838"), 22)
-	text_at("账单到期 · 躲开催债" + ("　" + challenge_label if challenge_label != "" else ""), Vector2(80, 170), 30, Color("#efbc72"))
-	text_at("应付 ¥" + str(bill_amount) + "      坚持到时间结束", Vector2(80, 222), 24)
-	text_at("剩余 " + ("%.1f" % maxf(0.0, bill_timer)) + " 秒", Vector2(80, 262), 22, Color("#c9b08a"))
-	panel(Rect2(80, 296, 800, 16), Color("#171a21"), 6)
-	panel(Rect2(80, 296, 800 * clampf(bill_timer / bill_time, 0.0, 1.0), 16), Color("#efbc72"), 6)
-	text_at("生命 ", Vector2(80, 340), 20, Color("#c7d5e0"))
-	for i in range(dodge_lives):
-		draw_heart(Vector2(140 + i * 30, 340))
-	text_at("移动鼠标躲开红色催债", Vector2(80, 380), 20, Color("#c7d5e0"))
+	draw_challenge_header("躲开催债", "应付 ¥" + str(bill_amount) + "　　撑到时间结束就算付清",
+		"移动鼠标甩开催债人 · 被碰到扣一颗心", dodge_lives)
+	if draw_challenge_stage():
+		return
 	for d in dodgers:
 		draw_dodger(d)
 	draw_player()

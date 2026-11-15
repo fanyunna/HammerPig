@@ -64,21 +64,52 @@ func run() -> void:
 	game.bill_open = true
 	await snap("tmp_p1_ledger.png")
 
-	# 账单到期考核：凑钱小游戏（检查标题里的账单名 + 面板排版）
+	# 账单到期考核：3D 舞台（凑钱）—— 金币落定后悬停一枚，看高亮与币面
 	game.bill_open = false
 	game.phase = "playing"
 	print("STEP challenge")
 	game.card_type = "collect"
 	game.bill_amount = 80
+	game.bill_timer = 38.0
 	game.start_challenge()
+	game.challenge_label = "房租 ¥560"
+	game.bill_timer = 38.0
 	game.collected = 35
 	game.coins.clear()
-	game.coins.append({"position": Vector2(320, 430), "velocity": Vector2.ZERO, "value": 5, "fake": false, "life": 5.0})
-	game.coins.append({"position": Vector2(520, 500), "velocity": Vector2.ZERO, "value": 5, "fake": false, "life": 5.0})
-	game.coins.append({"position": Vector2(760, 420), "velocity": Vector2.ZERO, "value": 5, "fake": false, "life": 5.0})
-	game.coins.append({"position": Vector2(940, 520), "velocity": Vector2.ZERO, "value": -5, "fake": true, "life": 5.0})
-	game.challenge_label = "房租 ¥560"
+	var coin_spots := [Vector2(300, 380), Vector2(520, 500), Vector2(700, 360), Vector2(880, 530), Vector2(1040, 410)]
+	for i in range(coin_spots.size()):
+		game.coin_uid += 1
+		game.coins.append({"position": coin_spots[i], "velocity": Vector2.ZERO, "value": 5,
+			"fake": i == 3, "life": 9.0, "vcid": game.coin_uid})
+	Input.warp_mouse(Vector2(700, 372)) # 停在一枚金币上：看悬停高亮
+	for i in range(45):
+		game.challenge3d._process(0.04) # 快进物理，让金币落到台面上
 	await snap("tmp_p1_challenge.png")
+
+	# 躲催债：一圈礼帽催收员围过来，光标环因危险变红
+	print("STEP dodge")
+	game.card_type = "dodge"
+	game.bill_amount = 560
+	game.start_challenge()
+	game.challenge_label = "房租 ¥560"
+	game.bill_timer = 26.0
+	game.dodge_lives = 3
+	game.dodgers.clear()
+	var dodger_spots := [Vector2(200, 400), Vector2(400, 600), Vector2(640, 660), Vector2(980, 430), Vector2(1120, 620), Vector2(520, 350)]
+	for i in range(dodger_spots.size()):
+		game.dodger_uid += 1
+		game.dodgers.append({"position": dodger_spots[i], "life": 9.0, "seed": float(i), "dcid": game.dodger_uid})
+	Input.warp_mouse(Vector2(760, 470))
+	for i in range(25):
+		game.challenge3d._process(0.04)
+	await snap("tmp_p1_dodge.png")
+
+	# 2D 回退（challenge_3d:false / 老机器）：确认没有 3D 时版面也立得住
+	print("STEP fallback")
+	var saved_3d = game.challenge3d
+	game.challenge3d = null
+	await snap("tmp_p1_challenge_2d.png")
+	game.challenge3d = saved_3d
 
 	# 代价型新卡：描述比老卡长，检查会不会溢出卡片
 	print("STEP card")

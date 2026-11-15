@@ -573,6 +573,20 @@ game.apply_card()
 
 ---
 
+## 8.8 第七轮：两个小游戏 3D 化（challenge3d.gd，2026-11-15）
+
+凑钱/躲催债两个小游戏原本是纯 `draw_circle` 画在深色面板上，与主玩法的 3D 存钱罐完全是两个世界。本轮按 §9 同样的 `SubViewport + 程序化网格` 套路新建 `scripts/challenge3d.gd`（`Challenge3D`，Node3D 容器），给小游戏一个真 3D 舞台。
+
+1. **接入结构**：`Challenge3D` 常驻 `_ready` 创建，仅 `phase == "challenge"` 时可见。它持有透视相机 + 木台面 + 灯光；金币与催债人用真实 3D 节点（柱体币身 + 圆环浮雕 + Label3D 币面），掉落带重力与弹跳，落地后旋转收到最近整圈停住（币面「¥/假」回到可读角度）。主循环只改了三个点：`_process` 里每帧 `challenge3d.sync_*`，`_unhandled_input` 的挑战分支直接调 `challenge3d.screen_to_floor()` 精确映射，`draw_collect/draw_dodge` 只画上半屏 HUD，舞台交给 3D。
+2. **布局**：上半屏 HUD（标题 + 账单名金额 + 进度条 + 提示/生命心形），下半屏 3D 舞台 —— 文字不再压在木纹上。
+3. **真假币辨识**（可玩性关键）：假币 = 八边形柱体 + 铁灰材质 + 红色「假」字 + 币缘暗红发光；金币 = 圆柱 + 金材质 +「¥」。文字 `shaded = false`，暗处也清晰。
+4. ⚠️ **木纹调参史（别再踩）**：`_wood_texture()` 的年轮参数三版试错——warp=2.2 → 大波浪迷彩；freq=0.52 → 10px 条纹灯芯绒；**当前 freq=0.12 + warp 0.6 + uv1_scale 9 ≈ 28px 年轮**，像真木板。划痕亮度 0.16 → 0.05（一高就像白色裂缝）。`PlaneMesh` 默认平躺法线朝 +Y，**不要再转 -90°**（转了台面消失）。
+5. ⚠️ **GDScript 类型推断**：`float(st["spin"])` 从 Dictionary 取值是 Variant，`var x := float(...)` 会报 "Cannot infer the type" —— 本文件统一用显式 `: float`。同样 `for` 迭代 typed array 拿副本、改元素必须索引写（§8.7 已记）。
+6. **fallback**：headless 下 `Challenge3D` 自动跳过（无渲染），小游戏逻辑测试全走数据层，与旧 2D 版断言兼容（`tmp_p1_challenge_2d.png` 截图脚本保留 2D 对照）。
+7. **测试**：逻辑层不变，仍 **183 断言全过**；视觉用 `tests/shot_p1.gd` 截图目视验收（金币立体感、假币辨识、催债人造型、木纹）。
+
+---
+
 ## 8.6 第五轮：蓄力重锤与暴击（从 qiaozhu-main 主干合并，2026-11-15）
 
 qiaozhu-main（11月10日的另一条开发线）在操作层做了手感重构，本轮把其中**蓄力重锤 + 暴击 + 输入缓冲**三件移植进本工程（本工程保留 AI 素材、快速还账条、债务日历与协同效果；qiaozhu 的假硬币、庄家的手、asset_total 胜利判定**未**移植 —— 它们和经济模型耦合太深，另议）。

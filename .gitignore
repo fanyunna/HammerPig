@@ -3,3 +3,4 @@ export/
 *.tmp
 *.log
 tmp_*.png
+tmp_*.png.import
