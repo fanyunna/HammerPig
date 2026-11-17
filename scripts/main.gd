@@ -95,6 +95,7 @@ var swing := 0.0
 const BillManagerScript := preload("res://scripts/bill_manager.gd")
 const Hammer3DScript := preload("res://scripts/hammer3d.gd")
 const WheelScript := preload("res://scripts/lucky_wheel.gd")
+const CardBuildScript := preload("res://scripts/card_build.gd")
 var bills_fx # 账单效果：电费停电 / 信用卡利息 / 房租催收（BillManagerScript 实例）
 var hammer3d # 独立透明视口中的立体锤光标
 var earned_total := 0 # 本局累计赚到的钱（房租催收按它跨阈值触发）
@@ -133,6 +134,7 @@ var coin_spawn_timer := 0.0
 var coin_uid := 0 # 金币的身份证号：3D 舞台靠它把"同一枚币"的动画串起来（每帧重算位置不等于重建）
 var double_timer := 0.0
 var wheel # 幸运转盘：独立子节点，低侵入，只读写 main 的公开状态
+var build # 卡片2.0：构筑/成长卡系统（合并版移植），低侵入
 var combo_count := 0
 var combo_timer := 0.0
 var combo_max := 0
@@ -174,6 +176,7 @@ func _ready() -> void:
 	var parsed_bills = JSON.parse_string(FileAccess.get_file_as_string(BILLS_PATH))
 	bill_data = parsed_bills if parsed_bills is Dictionary else {}
 	bills_fx = BillManagerScript.new()
+	build = CardBuildScript.new() # 卡片2.0：RefCounted，不进场景树，只吃 main 的公开状态
 	load_meta()
 	bills_fx.setup(bill_data)
 	bills_fx.collection_triggered.connect(_on_collection_triggered)
@@ -458,6 +461,7 @@ func pay_bill(index: int) -> void:
 	score -= due_amount
 	bills.remove_at(index)
 	paid_count += 1
+	build.record_payment(self) # 卡片2.0：债务操盘手/收据收藏家的还款成长与返现
 	for j in range(bills.size() - 1, -1, -1): # 倒着删，免得删完后面的下标全乱
 		var left: Variant = bills[j]
 		if left is Dictionary and extra.has(String(left.get("source", ""))):
@@ -510,6 +514,7 @@ func clear_cheapest_bill() -> void:
 		if String(bills[i].get("source", "")) == tag:
 			bills.remove_at(i)
 	paid_count += 1
+	build.record_payment(self) # 考核免单也算还款：与合并版行为一致
 	bills_fx.sync(bills) # 万一免费清掉的是张电费/信用卡，效果也得跟着走
 	sort_bills()
 
@@ -775,7 +780,7 @@ func random_pig_velocity(type := {}) -> Vector2:
 func sync_cursor() -> void:
 	var hide: bool = bool(settings.get("hammer_cursor", true))
 	hide = hide and (phase == "playing" or (phase == "challenge" and card_type == "dodge"))
-	hide = hide and not intro_open and not bill_open and bill_detail < 0 and not quick_bill_hover() and not help_open
+	hide = hide and not intro_open and not bill_open and bill_detail < 0 and not quick_bill_hover() and not help_open and not (build != null and build.panel_open)
 	hide = hide and not (wheel != null and wheel.is_open()) # 转盘弹窗里得看得见箭头
 	if hide == cursor_hidden:
 		return
@@ -1022,6 +1027,7 @@ func reset_game() -> void:
 			pig3d[i].apply_type(Dictionary(pigs[i].type))
 	if wheel != null:
 		wheel.reset_run() # 新局：机会/连击/三个 buff 计时全部清零（多余的金猪视口上面已随 pig3d 裁掉）
+	build.reset() # 新局：本局构筑卡全部清空
 	queue_redraw()
 
 func _process(delta: float) -> void:
@@ -1034,7 +1040,7 @@ func _process(delta: float) -> void:
 	if wheel != null and wheel.is_open(): # 转盘弹窗：整局暂停（猪停刷、不能砸）；转盘自己的 _process 继续转
 		queue_redraw()
 		return
-	if bill_open or bill_detail >= 0 or quick_bill_hover() or help_open: # 翻账单的时候整局都停下来：猪不走、卡不计时
+	if bill_open or bill_detail >= 0 or quick_bill_hover() or help_open or build.panel_open: # 翻账单/看构筑的时候整局都停下来：猪不走、卡不计时
 		queue_redraw()
 		return
 	elapsed += delta
@@ -1071,6 +1077,8 @@ func _process(delta: float) -> void:
 	double_timer = maxf(0.0, double_timer - delta)
 	if wheel != null:
 		wheel.tick(delta) # 转盘层：余额跨线送机会、buff 独立倒计时、金猪压扁/到期
+	if phase == "playing":
+		build.tick(delta, self) # 卡片2.0：狂暴/幸运锁/贪婪税计时、闪电特效寿命
 	combo_timer = maxf(0.0, combo_timer - delta)
 	if combo_timer <= 0.0:
 		combo_count = 0
@@ -1187,6 +1195,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.keycode == KEY_SPACE or event.keycode == KEY_ENTER:
 				wheel.confirm_result()
 		return
+	if build.panel_open: # 构筑面板期间：C / Esc 关闭，其余输入一律吞掉（整局已暂停）
+		if event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_C or event.keycode == KEY_ESCAPE):
+			build.panel_open = false
+			sync_cursor()
+			queue_redraw()
+		return
 	if event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_H or (help_open and event.keycode == KEY_ESCAPE)):
 		help_open = not help_open
 		sync_cursor()
@@ -1238,6 +1252,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if event.keycode == KEY_M: # 静音
 			Sound.toggle()
+		if event.keycode == KEY_C and phase == "playing" and not bill_open: # 构筑面板：查看本局成长
+			build.panel_open = not build.panel_open
+			sync_cursor()
+			queue_redraw()
+			return
 		if event.keycode == KEY_R:
 			reset_game()
 		elif phase == "card" and card_offers.size() == 3 and event.keycode in [KEY_1, KEY_2, KEY_3]:
@@ -1254,7 +1273,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			var ratio := clampf(charge_t / CHARGE_MAX, 0.0, 1.0)
 			charge_t = 0.0
 			if phase == "playing" and not bill_open and bill_detail < 0 \
-					and not help_open and gamble_state != "flip" and gamble_state != "result":
+					and not help_open and not build.panel_open and gamble_state != "flip" and gamble_state != "result":
 				strike_release(get_global_mouse_position(), 1.0 + pow(ratio, 1.6) * CHARGE_POWER)
 		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
@@ -1500,11 +1519,11 @@ func strike_target(point: Vector2) -> Dictionary:
 	return target
 
 func swing_stamina_cost() -> float:
-	return maxf(1.0, float(settings.get("stamina_cost", 4)) - stamina_cost_reduction)
+	return build.cost(self) # 卡片2.0：稳手学徒减耗 / 过载引擎加耗 / 狂战士暴走七折
 
 
 func strike(point: Vector2, power := 1.0) -> void:
-	if phase != "playing":
+	if phase != "playing" or build.panel_open:
 		return
 	if cooldown > 0.0:
 		# 冷却里按下的这一锤不进垃圾桶：记下来，冷却一结束立刻补上。
@@ -1524,7 +1543,7 @@ func strike(point: Vector2, power := 1.0) -> void:
 		return
 	hammer_position = point
 	swing = 0.16
-	cooldown = maxf(0.08, float(settings.swing_cooldown) * swing_cooldown_mul() - hammer_cooldown_reduction)
+	cooldown = build.cooldown(self) # 卡片2.0：过载引擎/狂战士/赊账/马刺的冷却修正都算在里面
 	stamina -= cost
 	var landed := false # 有没有打到东西：空挥要有和命中完全不同的声音
 	var target := strike_target(point)
@@ -1547,6 +1566,16 @@ func strike(point: Vector2, power := 1.0) -> void:
 				# 断臂求生：轻锤完全出不了伤害，想砸碎任何东西都必须蓄满。
 				# 连击照样计数（你确实打中了），只是这一下不疼。
 				hit_damage = int(round(float(hit_damage) * heavy_hammer_multiplier)) if power >= 1.30 else 0
+			if hit_damage > 0: # 断臂求生的零伤锤不吃卡片增伤
+				build.progress("berserker", self) # 狂战士训练：每命中一次记一次成长
+				hit_damage += build.damage_bonus() + build.consume_focus(self) # 暴走 +1 / 校准锤蓄伤
+			if combo_count == 5:
+				build.progress("steadiness", self) # 稳手学徒：五连击计成长
+			var lucky_crit: bool = build.roll_critical() # 幸运马蹄铁的独立暴击：伤害翻倍（与本地连击暴击相互独立）
+			if lucky_crit and hit_damage > 0:
+				hit_damage *= 2
+				Sound.play("crit")
+			build.critical_reward(lucky_crit, self)
 			pig.hp -= hit_damage
 			if hit_damage <= 0:
 				# 断臂求生：打中了却没掉血，必须给一句反馈，否则玩家会以为判定坏了
@@ -1579,7 +1608,7 @@ func strike(point: Vector2, power := 1.0) -> void:
 				if gain > 0:
 					# 玻璃猎人：点名的猪种翻倍、其余打折 —— 这一局你要盯着某一类猪砸。
 					var type_mul := float(type_value_bonus.get(kind, type_value_penalty))
-					gain = roundi(float(gain) * earnings_multiplier * power * type_mul)
+					gain = roundi(float(gain) * earnings_multiplier * power * type_mul * build.income_multiplier())
 					if combo_count > 1:
 						gain += (combo_count - 1) * combo_bonus_per_hit
 						if earnings_multiplier > 1.0:
@@ -1600,6 +1629,7 @@ func strike(point: Vector2, power := 1.0) -> void:
 					gain = roundi(float(gain) * wheel_score_mul()) # 转盘得分×2：与卡片双倍相互独立，可叠乘
 					score += gain
 				broken += 1
+				build.progress("hunter", self) # 猎猪执照：击碎计数成长
 				spawn_particles(pig.position, kind, gain)
 				var pcolor := Color("#ffe092")
 				if gain < 0:
@@ -1639,6 +1669,7 @@ func strike(point: Vector2, power := 1.0) -> void:
 					# 别在这一帧就弹：一分钱势的钱票还飘着、粒子刚炸开、音效还没响完。
 					# 留半秒让反馈播完 —— 这段时间玩家还能继续砸，等于又多攒了几块。
 					card_delay = float(settings.get("card_pop_delay", 0.45))
+			build.after_hit(pig, point, self) # 卡片2.0：重锤爆破 / 连锁破碎的波次伤害（击杀走 settle_card_break）
 			break
 	if wheel != null: # 转盘机会的连击计数：砸中 +1，漏砸（挥空）清零
 		if landed:
@@ -1646,6 +1677,7 @@ func strike(point: Vector2, power := 1.0) -> void:
 		else:
 			wheel.on_missed_swing()
 	if not landed: # 挥空的“风声”要比命中轻，否则每次空挥都像打到了东西
+		build.register_miss(self) # 卡片2.0：校准锤上膛 / 破罐保险计次
 		stamina = maxf(0.0, stamina - float(settings.get("stamina_miss_extra", 0.0)))
 		Sound.play("miss", 1.0, 0.7)
 		if power >= 1.30:
@@ -1656,6 +1688,65 @@ func strike(point: Vector2, power := 1.0) -> void:
 			popups.append({"position": point + Vector2(-30, -70), "life": 0.9,
 				"text": "砸空了", "color": Color("#d08f7a"), "size": 20})
 			Sound.play("stamp", 0.6, 0.8)
+
+## 卡片2.0 的连锁/爆破击杀结算：与 strike 主结算同一套入账规则，
+## 但不带蓄力倍率与猪种修正（连锁伤害本身就不挑猪种）。
+func settle_card_break(pig: Dictionary, secondary: bool) -> void:
+	if pig.hp > 0 or float(pig.respawn) > 0.0:
+		return
+	pig.respawn = float(settings.respawn_seconds)
+	shake = float(settings.get("shake_duration", 0.12))
+	var kind: String = String(pig.type.get("id", "piggy"))
+	var gain := pig_value(pig.type)
+	if gain > 0:
+		gain = roundi(float(gain) * earnings_multiplier * build.income_multiplier())
+		if secondary:
+			gain += build.secondary_reward(self)
+		if combo_count > 1:
+			gain += (combo_count - 1) * combo_bonus_per_hit
+			if earnings_multiplier > 1.0:
+				gain += (combo_count - 1) * 2 # 贪婪 + 连击：连击层数继续放大收益
+	if combo_count >= int(settings.get("combo_threshold_fever", 5)):
+		for i in range(3): # 狂热：再撒两把，手气正旺的时候满桌是钱
+			spawn_particles(pig.position, kind, gain)
+	if gain < 0:
+		# 催债猪：碎了要倒贴，但最多白干一场，不许一锤失误直接破产
+		score = maxi(1, score + gain)
+	else:
+		if double_timer > 0.0:
+			gain *= 2
+		gain = roundi(float(gain) * wheel_score_mul()) # 转盘得分×2与卡片加成独立叠乘
+		score += gain
+	broken += 1
+	build.progress("hunter", self) # 连锁击碎同样计入猎猪执照
+	spawn_particles(pig.position, kind, gain)
+	var pcolor := Color("#ffe092")
+	if gain < 0:
+		pcolor = Color("#e06c5c")
+		Sound.play("stamp", 1.0, 0.95)
+		Sound.play("tails", 1.0, 0.45) # 下坠音：这不是好事
+	else:
+		if kind == "gold":
+			pcolor = Color("#ffd76a")
+			Sound.play("pop", 0.82) # 大，闷
+			Sound.play("coin_land", 1.0, 0.55) # 金属余韵：一听就知道是大钱
+		elif kind == "mini":
+			Sound.play("pop", 1.35) # 小，脆
+			Sound.play("cash", 1.2, 0.4)
+		else:
+			Sound.play("pop")
+			Sound.play("cash", 1.0, 0.5) # 碎裂的闷响之后再给一声"叮"：钱到账了
+	popups.append({"position": pig.position + Vector2(0, -55), "life": 0.9,
+		"text": ("+¥" + str(gain) if gain > 0 else "-¥" + str(-gain)), "color": pcolor})
+	pig_broken.emit(gain)
+	if score >= int(settings.round_target):
+		end_reason = "target"
+		phase = "finished"
+		award_meta_progress()
+		Sound.play("win")
+	elif score >= next_card:
+		next_card += int(settings.card_interval)
+		card_delay = float(settings.get("card_pop_delay", 0.45))
 
 ## 补上冷却期间按下、还没落下去的那一锤。
 ## 优先砸回玩家当时瞄准的那一只：它可能已经走了几步，但"我要砸它"这个意图没变；
@@ -1751,6 +1842,7 @@ func make_card_offers() -> Array[Dictionary]:
 			card.desc = "已有连击联动：连击层数也计入收益"
 		elif String(card.id) == "stamina" and stamina_cost_reduction > 0.0:
 			card.desc = "轻型锤柄联动：上限额外 +10，恢复 45 点"
+	pool = build.prepare_pool(pool) # 卡片2.0：抽掉基础重锤，混入进化/代价/任务卡（已持有的不再重复出）
 	var offers: Array[Dictionary] = []
 	while offers.size() < 3 and not pool.is_empty():
 		var idx := randi() % pool.size()
@@ -1807,9 +1899,10 @@ func apply_card(choice := -1) -> void:
 		if choice < 0 or choice >= card_offers.size():
 			choice = 0
 		var offer: Dictionary = card_offers[choice]
+		build.acquire(String(offer.id), self) # 卡片2.0：进化/代价/任务卡的等级与一次性效果在 build 里记账
 		match String(offer.id):
 			"heavy":
-				hammer_damage_bonus += 1
+				pass # 重锤改造已进化化，加成由 acquire 按等级结算
 			"light":
 				stamina_cost_reduction += 0.5
 			"reach":
@@ -2556,6 +2649,7 @@ func _draw() -> void:
 		draw_set_transform(Vector2.ZERO)
 	for p in popups:
 		text_at(p.text, p.position, int(p.get("size", 28)), p.get("color", Color("#ffe092")))
+	build.draw_effects(self) # 卡片2.0：连锁/爆破的闪电连线
 	panel(Rect2(0, 664, 1280, 136), Color(0.06, 0.09, 0.09, 0.24), 0) # 3D 桌面是暖色，底部说明要压一条暗底才看得清
 	if phase == "playing":
 		draw_gamble_hint() # 赌徒心理的实时诱导，放在底部信息栏第一行
@@ -2607,6 +2701,7 @@ func _draw() -> void:
 			text_center(legend_lines[i], 640, 435 + i * 25, 16, Color("#c9b08a"))
 		text_center("敲碎 " + str(broken) + " 只 · 成长碎片 " + str(meta_shards), 640, 531, 17)
 		text_center("游戏已暂停 · 点击任意位置或按 H / Esc 返回", 640, 575, 16, Color("#efbc72"))
+	build.draw_status(self) # 卡片2.0：C 面板提示与构筑清单，盖在最上层
 
 func draw_pig(pig: Dictionary, index: int) -> void:
 	if bool(pig.get("wheel_gold", false)):
