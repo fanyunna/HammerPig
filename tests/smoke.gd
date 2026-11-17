@@ -1,4 +1,5 @@
 extends SceneTree
+const BillManagerScript = preload("res://scripts/bill_manager.gd")
 var game
 var checks := 0
 
@@ -878,21 +879,26 @@ func run() -> void:
             _alive = bi
             break
     game.bills[_alive]["due_day"] = game.game_day
+    # 日历会一次性推进多天（earned_total 已攒了几天的量）：其余账单全部推到远期，
+    # 保证这一步只有被绑定的那张到期 —— 否则逾期计数随随机账单时好时坏
+    for bi in range(game.bills.size()):
+        if bi != _alive:
+            game.bills[bi]["due_day"] = game.game_day + 999
     game.pending_challenge = {}
     game.earned_total += income_day
     game._process(0.016)
     check(game.phase == "challenge", "the next due bill opens another challenge")
-    var overdue_before := 0
-    for b in game.bills:
-        if bool(b.get("overdue", false)):
-            overdue_before += 1
+    var bound_tag_loss: String = game.challenge_bill_tag
+    check(not bound_tag_loss.is_empty(), "the loss challenge is bound to a real bill")
     var score_before_loss: int = game.score
     game.finish_challenge(false)
-    var overdue_after := 0
+    # 意图断言：被绑定的那张账单（或同标签的连坐单）当场盖了逾期章。
+    # 不再比较逾期计数 —— 利息单/滞纳单可能与被绑账单同标签，计数会随随机账单漂移。
+    var stamped := false
     for b in game.bills:
-        if bool(b.get("overdue", false)):
-            overdue_after += 1
-    check(overdue_after == overdue_before + 1, "losing stamps the due bill as overdue right away")
+        if String(BillManagerScript.tag_of(b)) == bound_tag_loss and bool(b.get("overdue", false)):
+            stamped = true
+    check(stamped, "losing stamps the due bill as overdue right away")
     check(game.score == score_before_loss - int(game.settings.bill_amount), "losing still costs the penalty")
 
     # 一局有上限：超出上限就退回原来的「直接盖章」
@@ -1028,6 +1034,255 @@ func run() -> void:
             seen_ids[String(card.id)] = true
     check(not seen_ids.has("allin") and not seen_ids.has("onehand") and not seen_ids.has("glasshunter"),
         "one-off remodel cards are never offered again")
+
+    # ================= 幸运转盘：机会获取 / 暂停 / 六种结果 / 金猪 =================
+    # 本地版多了概率暴击（合并版没有），测试段先关掉保证确定性
+    game.settings["crit_base_chance"] = 0.0
+    game.settings["crit_per_combo"] = 0.0
+    key_press(KEY_R)
+    game.next_card = 100000
+    game.gamble_used = true
+    game.challenge_count = 99 # 日历推进不再触发考核打断（满上限后只盖章）
+    for b in game.bills:
+        b["due_day"] = game.game_day + 999 # 账单全部推到远期：日历怎么走都不会逾期
+    check(game.wheel != null and game.wheel.chances == 0, "a fresh run starts with no wheel chances")
+    check(not game.wheel.open_wheel(), "the wheel refuses to open without chances")
+
+    # 余额跨过 ¥500 → +1 次机会
+    game.score = 499
+    game._process(0.016)
+    check(game.wheel.chances == 0, "no wheel chance just below ¥500")
+    game.score = 500
+    game._process(0.016)
+    check(game.wheel.chances == 1, "reaching ¥500 grants a wheel chance")
+    game.wheel.chances = 0
+
+    # 连续砸中 12 只 → +1 次机会；漏砸（挥空）清零
+    game.settings["pig_types"] = [
+        {"id": "piggy", "weight": 100, "hp": 1, "value": 1, "speed": 0.0, "scale": 1.0}
+    ]
+    key_press(KEY_R)
+    game.next_card = 100000
+    game.gamble_used = true
+    game.challenge_count = 99
+    for b in game.bills:
+        b["due_day"] = game.game_day + 999
+    for i in range(12):
+        click(game.pigs[i].position)
+    check(game.wheel.chances == 1 and game.wheel.streak == 0,
+        "12 consecutive hits grant a wheel chance and reset the streak")
+    for i in range(12, 17):
+        click(game.pigs[i].position)
+    check(game.wheel.streak == 5, "landed hits count up the streak")
+    click(Vector2(0, 0))
+    check(game.wheel.streak == 0, "a missed swing resets the streak")
+    game.wheel.chances = 0
+
+    # 转盘弹窗期间整局暂停；结果 0 = +¥120
+    game.wheel.chances = 1
+    check(game.wheel.open_wheel(0), "the wheel opens on a forced sector")
+    check(game.wheel.is_open(), "the wheel popup is open")
+    game.cooldown = 0.5
+    game._process(0.1)
+    check(game.cooldown == 0.5, "the wheel popup pauses the round")
+    var score_before_spin: int = game.score
+    game.wheel.finish_spin()
+    check(game.score == score_before_spin + 120, "sector 0 pays ¥120")
+    game.wheel.confirm_result()
+    check(not game.wheel.is_open(), "confirm closes the wheel popup")
+
+    # 结果 3 = 直还 5 张账单（先垫 5 张小额账单，保证一定有得免）
+    key_press(KEY_R)
+    game.next_card = 100000
+    game.gamble_used = true
+    game.challenge_count = 99
+    for i in range(5):
+        game.bills.append({"name": "测试垫账 " + str(i), "amount": 10, "due_day": game.game_day + 999})
+    game.sort_bills()
+    var bills_before: int = game.bills.size()
+    game.wheel.chances = 1
+    game.wheel.open_wheel(3)
+    game.wheel.finish_spin()
+    game.wheel.confirm_result()
+    check(game.bills.size() == bills_before - 5, "sector 3 pays off five bills for free")
+
+    # 结果 1 = 20 秒得分翻倍（独立计时器，作用在敲猪收益上）
+    game.wheel.chances = 1
+    game.wheel.open_wheel(1)
+    game.wheel.finish_spin()
+    game.wheel.confirm_result()
+    check(game.wheel.double_left > 19.0, "sector 1 arms the double buff for 20s")
+    var s0: int = game.score
+    break_pig(0)
+    check(game.score == s0 + 2, "the wheel double buff doubles pig earnings")
+
+    # 结果 2/4 = 变慢与变快叠加：独立计时器同时生效
+    game.wheel.chances = 2
+    game.wheel.open_wheel(2)
+    game.wheel.finish_spin()
+    game.wheel.confirm_result()
+    game.wheel.open_wheel(4)
+    game.wheel.finish_spin()
+    game.wheel.confirm_result()
+    check(game.wheel.slow_left > 0.0 and game.wheel.fast_left > 0.0,
+        "slow and fast buffs stack with independent timers")
+    check(game.wheel.pig_speed_multiplier() < 1.0, "the stacked multipliers apply to pig speed")
+    game._process(21.0)
+    check(game.wheel.slow_left == 0.0 and game.wheel.fast_left == 0.0
+        and is_equal_approx(game.wheel.pig_speed_multiplier(), 1.0),
+        "buffs expire on their own timers")
+
+    # 结果 5 = 金猪降临：生成 5 只，砸中 +¥200，压扁后爆金币移除，到期自动消失
+    key_press(KEY_R)
+    game.next_card = 100000
+    game.gamble_used = true
+    game.challenge_count = 99
+    var base_pigs: int = game.pigs.size()
+    game.wheel.chances = 1
+    game.wheel.open_wheel(5)
+    game.wheel.finish_spin()
+    game.wheel.confirm_result()
+    check(game.pigs.size() == base_pigs + 5, "sector 5 spawns five extra pigs")
+    var golds := 0
+    for p in game.pigs:
+        if bool(p.get("wheel_gold", false)):
+            golds += 1
+    check(golds == 5, "...and they are the golden ones")
+
+    # 把普通猪挪出判定范围，单独砸一只金猪
+    var gi := -1
+    for i in range(game.pigs.size()):
+        if bool(game.pigs[i].get("wheel_gold", false)):
+            gi = i
+            break
+    for p in game.pigs:
+        if not bool(p.get("wheel_gold", false)):
+            p.position = Vector2(60, 760)
+    game.pigs[gi].velocity = Vector2.ZERO
+    var s1: int = game.score
+    click(game.pigs[gi].position)
+    check(game.score == s1 + 200, "smashing a wheel gold pig pays a flat ¥200")
+    check(game.pigs[gi].hp == 0 and float(game.pigs[gi].gold_squash) > 0.0,
+        "...and starts the squash animation before bursting")
+    game._process(0.5)
+    golds = 0
+    for p in game.pigs:
+        if bool(p.get("wheel_gold", false)):
+            golds += 1
+    check(golds == 4 and game.pigs.size() == base_pigs + 4,
+        "the smashed gold pig bursts into coins and leaves the table")
+    game._process(game.wheel.GOLD_PIG_LIFE + 1.0)
+    golds = 0
+    for p in game.pigs:
+        if bool(p.get("wheel_gold", false)):
+            golds += 1
+    check(golds == 0 and game.pigs.size() == base_pigs,
+        "unsmashed gold pigs vanish on their own and the table is back to normal")
+
+    # ================= 卡片2.0：卡池 / 获得 / 修正 / 连锁结算 =================
+    key_press(KEY_R)
+    game.next_card = 100000
+    game.gamble_used = true
+    game.challenge_count = 99
+    for b in game.bills:
+        b["due_day"] = game.game_day + 999
+
+    # prepare_pool：抽掉基础重锤，换上完整的一套卡片2.0
+    var fake_pool: Array[Dictionary] = [
+        {"id": "heavy", "name": "重锤改造", "desc": "", "icon": "", "color": ""}
+    ]
+    var prepared: Array[Dictionary] = game.build.prepare_pool(fake_pool)
+    var prepared_ids := {}
+    for card in prepared:
+        prepared_ids[String(card.id)] = true
+    check(prepared.size() == game.build.DEFINITIONS.size() and prepared_ids.has("heavy")
+        and prepared_ids.has("lucky") and prepared_ids.has("berserker"),
+        "prepare_pool swaps the plain heavy for the full card 2.0 roster")
+
+    # 弹出的卡池里，重锤都是进化版（带 Lv.），不再是那张一次性基础卡
+    var plain_heavy := false
+    for card in game.make_card_offers():
+        if String(card.id) == "heavy" and not String(card.name).contains("Lv."):
+            plain_heavy = true
+    check(not plain_heavy, "the plain heavy card is replaced by its evolved version")
+
+    # 重锤改造 Lv.1：+1 伤害（走 acquire，不再走本地 match）
+    game.build.acquire("heavy", game)
+    check(int(game.hammer_damage_bonus) == 1, "the evolved heavy grants +1 damage at Lv.1")
+
+    # 恶魔契约：收益 ×1.4，体力上限打八折
+    var smax_before: float = float(game.settings.get("stamina_max", 100))
+    game.build.acquire("devil", game)
+    check(is_equal_approx(game.build.income_multiplier(), 1.4), "the devil contract raises income by 40%")
+    check(float(game.settings.get("stamina_max", 100)) < smax_before,
+        "...and cuts the stamina ceiling by 20%")
+
+    # 酒馆赊账：立得 ¥45，挥锤冷却 ×1.15
+    var s2: int = game.score
+    game.build.acquire("loan", game)
+    check(game.score == s2 + 45, "the tavern loan pays ¥45 up front")
+    var base_cd: float = float(game.settings.swing_cooldown) * game.swing_cooldown_mul() \
+        - game.hammer_cooldown_reduction
+    check(is_equal_approx(game.build.cooldown(game), base_cd * 1.15),
+        "...and slows the swing cooldown by 15%")
+
+    # 狂战士训练：15 次命中升到 Lv.2，冷却再 ×0.9
+    game.build.acquire("berserker", game)
+    for i in range(15):
+        game.build.progress("berserker", game)
+    check(game.build.level("berserker") == 2, "berserker grows to Lv.2 after 15 landed hits")
+    check(is_equal_approx(game.build.cooldown(game), base_cd * 1.15 * 0.9),
+        "...and Lv.2 berserker speeds up the swing by 10%")
+
+    # 稳手学徒：两组五连击升到 Lv.2，挥锤体力 -0.25
+    var cost_before: float = game.build.cost(game)
+    game.build.acquire("steadiness", game)
+    game.build.progress("steadiness", game)
+    game.build.progress("steadiness", game)
+    check(game.build.level("steadiness") == 2, "steadiness reaches Lv.2 after two five-combos")
+    check(is_equal_approx(game.build.cost(game), cost_before - 0.25),
+        "...and each swing costs 0.25 less stamina")
+
+    # 破罐保险：每三次空挥返还 2 体力
+    game.build.acquire("insurance", game)
+    game.stamina = 10.0
+    for i in range(3):
+        game.build.register_miss(game)
+    check(is_equal_approx(game.stamina, 12.0), "the insurance refunds 2 stamina every third miss")
+
+    # 收据收藏家：第一次还账升 Lv.2，返现 ¥2
+    game.build.acquire("collector", game)
+    var s3: int = game.score
+    game.build.record_payment(game)
+    check(game.score == s3 + 2, "the receipt collector rebates ¥2 per payment")
+
+    # 幸运马蹄铁 Lv.3：暴击额外 +¥3
+    game.build.acquire("lucky", game)
+    game.build.acquire("lucky", game)
+    game.build.acquire("lucky", game)
+    var s4: int = game.score
+    game.build.critical_reward(true, game)
+    check(game.score == s4 + 3, "a lucky Lv.3 crit tips an extra ¥3")
+
+    # 已持有的代价/任务卡退出卡池；进化卡未满级仍会出现
+    var prepared2: Array[Dictionary] = game.build.prepare_pool(fake_pool)
+    var prepared2_ids := {}
+    for card in prepared2:
+        prepared2_ids[String(card.id)] = true
+    check(not prepared2_ids.has("devil") and not prepared2_ids.has("loan")
+        and not prepared2_ids.has("steadiness") and prepared2_ids.has("lucky"),
+        "owned cost/quest cards leave the pool while unfinished evolutions stay")
+
+    # 连锁/爆破击杀结算：settle_card_break 入账并安排重生
+    var chain_pig := {
+        "position": Vector2(640, 400), "type": game.pigs[0].type,
+        "hp": 0, "max_hp": 1, "respawn": 0.0, "flash": 0.0, "hop": 0.0,
+        "seed": 1.0, "hop_phase": 0.0, "left": true, "velocity": Vector2.ZERO
+    }
+    var s5: int = game.score
+    game.settle_card_break(chain_pig, true)
+    check(float(chain_pig.respawn) > 0.0 and game.score == s5 + 1,
+        "settle_card_break pays a chain-killed pig and schedules its respawn")
 
     print("ALL ", checks, " CHECKS PASSED")
     game.queue_free() # 音效在 Sound 这个 autoload 里，不随场景释放，不用等它放完

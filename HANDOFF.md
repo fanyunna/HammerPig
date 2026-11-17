@@ -605,6 +605,35 @@ qiaozhu-main（11月10日的另一条开发线）在操作层做了手感重构�
 
 ---
 
+### 8.9 第八轮：移植幸运转盘（lucky_wheel.gd 接线，2026-11-17）
+
+把 GitHub 合并版（fanyunna/HammerPig 的 `p1-bill-pressure` 分支）里的幸运转盘移植进本地主线。**策略是低侵入移植**：只搬 `lucky_wheel.gd` 一个文件（604 行，与合并版逐字节一致），再在 `main.gd` 里做 13 处接线。合并版缺蓄力/暴击/考核/3D 小游戏，不能整树切换，只能挑文件搬。
+
+1. **接线点**：`WheelScript` preload + `var wheel` + `_ready` 里 `new/add_child/setup(self)`（子节点挂在最上层，自带 `_draw`）；`_process` 开头 `wheel.is_open()` 整局暂停；`wheel.tick(delta)` 驱动 buff 倒计时与金猪；`_unhandled_input` 转盘弹窗吞输入只认点击/空格/回车；`strike` 结尾 `on_landed_hit()/on_missed_swing()`。
+2. **机会获取**：余额跨 ¥500 或连续砸中 12 只（漏砸清零）→ +1 次机会。六种结果：+¥120 / 20 秒得分翻倍 / 变慢 / 直还 5 张账单 / 变快 / 金猪降临。
+3. **金猪系统**（main.gd 侧新增 8 个辅助函数）：`spawn_wheel_gold_pigs`（hp=1、一锤 +¥200、`wheel_gold` 标记 + 金色光晕 + 压扁回弹）、`_pick_gold_spawn_pos`（14 候选取最远）、`despawn_pig`（pigs/pig3d **必须同步删**，下标一一对应）、`_resolve_wheel_gold_hit`（固定 ¥200，不吃卡片/连击/暴击加成）、`pay_bills_free`（免单 5 张）。
+4. **倍率接缝**：`wheel_speed_mul()` 乘在猪移动/重生上、`wheel_score_mul()` 乘在敲猪收益上（与卡片双倍、暴击相互独立叠乘）。
+5. **测试**：移植合并版转盘断言 24 条，适配两点 —— ① 测试段先 `crit_base_chance = 0`（本地有概率暴击，合并版没有，不关会随机翻车）；② 每次重开后把账单 `due_day` 推远 + `challenge_count = 99`（日历随余额跳天数，防止考核打断）。断言总数 156 → **~180**。
+6. ⚠️ **金猪判定在 `pig.hp <= 0` 之后**：金猪 hp=1，一锤先扣血再走专属结算，别把它并进普通碎猪分支。
+
+---
+
+### 8.10 第九轮：接线卡片 2.0（card_build.gd，2026-11-17）
+
+同一合并版里的 `card_build.gd`（336 行，15 张进化/代价/任务卡）此前只入库未接线，本轮接入 `main.gd`（24 处改动，+103 行）。**提交史**：dab6e13（第八轮）→ ef7a97b（第九轮），均已推送 GitHub `p1-local` 分支。
+
+1. **卡池注入**：`make_card_offers()` 末尾 `pool = build.prepare_pool(pool)` —— 基础「重锤改造」被抽走，换成进化版（Lv.1→4）；代价/任务卡持有后不再重复出。原有的一次性改造过滤（allin/glasshunter/onehand）保留在前。
+2. **获得**：`apply_card()` 在 match 之前 `build.acquire(id, self)`；本地 match 的 `"heavy"` 改为 `pass`（加成由 acquire 按等级结算），其余基础卡不变。
+3. **数值接缝**：`swing_stamina_cost()` → `build.cost(self)`（稳手减耗/过载加耗/狂战士暴走七折）；strike 冷却 → `build.cooldown(self)`（过载/狂战士/赊账/马刺）；收益乘 `build.income_multiplier()`（保险 0.9/恶魔 1.4/贪婪税 1.35/猎猪 +10%/层）。
+4. **命中钩子**：strike 内 `progress("berserker")`（每命中）→ `damage_bonus()+consume_focus()`（暴走+1/校准锤蓄伤）→ 五连击 `progress("steadiness")` → `roll_critical()`（幸运马蹄铁**伤害 ×2**，与本地连击暴击〔收益 ×2〕独立并存）→ `critical_reward()`（幸运连击奖金）；碎猪后 `progress("hunter")` + `after_hit()`（重锤爆破/连锁破碎波次伤害）；空挥 `register_miss()`（校准锤上膛/破罐保险计次）。
+5. **连锁结算**：新增 `settle_card_break(pig, secondary)`（从合并版移植）：连锁/爆破击杀的入账与重生，**不带蓄力倍率与猪种修正**；幸存猪（hp>0）与已进重生计时的猪直接跳过。
+6. **还账钩子**：`pay_bill()` 与 `clear_cheapest_bill()`（考核免单）各加 `build.record_payment(self)`（债务操盘手/收据收藏家成长与返现）。转盘的 `pay_bills_free` **不**计入（系统替你付 ≠ 你还的债）。
+7. **C 键构筑面板**：`build.panel_open` 打开时 `_process` 整局暂停、`_unhandled_input` 吞掉一切输入（C/Esc 关闭）、strike/strike_release/光标隐藏全部短路；`_draw` 末尾 `build.draw_effects()`（闪电连线）+ `build.draw_status()`（面板盖最上层）。
+8. **测试**：+40 断言 → **224**。覆盖 prepare_pool 全量卡池/已持排除、恶魔契约/赊账/狂战士/稳手/保险/收藏家/幸运效果、`settle_card_break` 入账。⚠️ **`build` 是无类型变量**，从它取返回值必须显式标类型（`var x: Array[Dictionary] = game.build.prepare_pool(...)`），`:=` 推断会直接解析报错。
+9. ⚠️ **修复了一条陈年随机翻车**：「输掉考核立刻盖章」改为意图断言（绑定标签的账单事后确实逾期），不再比较逾期总数 —— 利息单/滞纳单可能与被绑账单同标签（`tag_of` = `id#no`），盖章落在哪一张随随机账单漂移。修复后连跑 4 次全绿。
+
+---
+
 ## 9. 3D 视口实现（小猪、桌面与锤子）
 
 > 当前版本已将存钱罐、赌场桌面和第一人称锤手接入独立 3D 视口；卡片和账单等界面仍由 2D 自绘。小猪的程序化网格实现细节记录在本节，桌面与锤手当前结构见 §3.5。
