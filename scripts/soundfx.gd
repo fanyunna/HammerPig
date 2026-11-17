@@ -36,11 +36,16 @@ var _cache := {}
 
 
 func _ready() -> void:
-    for i in range(6): # 轮转使用：连打时前一个音不会被后一个掐断
+    for i in range(12): # 轮转使用：连打时前一个音不会被后一个掐断（12 个够连击叠加）
         var p := AudioStreamPlayer.new()
         p.volume_db = 0.0
         add_child(p)
         _players.append(p)
+    # 预热：把全部音效 buffer 先合成进 _cache，消除第一次敲击时现场合成的卡顿。
+    # 不预热的话，玩家第一次打到某只猪、第一次弹卡时都会因为现场合成卡一下，显得"木讷"。
+    for name in LIST:
+        _make(name)
+    _make("crack") # 素材音效也提前 load，别等第一次敲击再读盘
 
 
 func play(name: String, pitch := 1.0, gain := 1.0) -> void:

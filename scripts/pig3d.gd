@@ -399,6 +399,19 @@ func apply_type(t: Dictionary) -> void:
 	if _star != null:
 		_star.visible = bool(t.get("star", false))
 
+	# 转盘金猪：金色低粗糙度 + 自发光，和普通陶瓷猪一眼区分（视口复用时也要能关掉）
+	if bool(t.get("glow", false)):
+		_body_mat.emission_enabled = true
+		_body_mat.emission = Color("#a87c14")
+		_body_mat.emission_energy_multiplier = 1.1
+		_body_mat.metallic = 0.45
+		_body_mat.roughness = 0.3
+		_body_mat.rim = 0.32
+		_body_mat.rim_tint = 0.3
+	else:
+		_body_mat.emission_enabled = false
+		_body_mat.metallic = 0.0
+
 
 func _color(t: Dictionary, key: String, fallback: String) -> Color:
 	var raw: Variant = t.get(key, fallback) # 不能用 := 推断：Dictionary.get 返回 Variant，会被当成警告（本项目警告即错误）
@@ -419,6 +432,8 @@ func update_visual(pig: Dictionary, elapsed: float) -> void:
 	if flash > 0.0:
 		col = col.lerp(Color.WHITE, clampf(flash / 0.14, 0.0, 1.0))
 	_body_mat.albedo_color = col
+	if _body_mat.emission_enabled: # 金猪自发光持续明暗闪烁
+		_body_mat.emission_energy_multiplier = 0.8 + 0.5 * (0.5 + 0.5 * sin(elapsed * 5.0 + seed_v))
 
 	var vel: Vector2 = pig.velocity
 	_root3d.rotation.y = clampf(vel.x / 160.0, -0.45, 0.45) + 0.12 * sin(elapsed * 1.6 + seed_v)

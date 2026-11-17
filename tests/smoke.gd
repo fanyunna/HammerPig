@@ -870,7 +870,14 @@ func run() -> void:
 
     # 输了：账单当场逾期，钱照扣
     game.bills.sort_custom(func(a, b): return int(a.get("due_day", 9999)) < int(b.get("due_day", 9999)))
-    game.bills[0]["due_day"] = game.game_day
+    # 排序后的第一张可能是前面日历测试已盖过逾期章的旧账（advance_calendar 会跳过它），
+    # 绑账单必须绑一张还活着的，否则这段断言随 roll_bills 的随机结果时好时坏
+    var _alive := -1
+    for bi in range(game.bills.size()):
+        if not bool(game.bills[bi].get("overdue", false)):
+            _alive = bi
+            break
+    game.bills[_alive]["due_day"] = game.game_day
     game.pending_challenge = {}
     game.earned_total += income_day
     game._process(0.016)
