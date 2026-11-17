@@ -413,7 +413,7 @@ func pay_bill(index: int) -> void:
 	score -= due_amount
 	bills.remove_at(index)
 	paid_count += 1
-	build.progress("broker", self)
+	build.record_payment(self)
 	for j in range(bills.size() - 1, -1, -1): # 倒着删，免得删完后面的下标全乱
 		var left: Variant = bills[j]
 		if left is Dictionary and extra.has(String(left.get("source", ""))):
@@ -461,7 +461,7 @@ func clear_cheapest_bill() -> void:
 		if String(bills[i].get("source", "")) == tag:
 			bills.remove_at(i)
 	paid_count += 1
-	build.progress("broker", self)
+	build.record_payment(self)
 	bills_fx.sync(bills) # 万一免费清掉的是张电费/信用卡，效果也得跟着走
 	sort_bills()
 
@@ -1319,7 +1319,9 @@ func strike(point: Vector2) -> void:
 			if hammer_damage_bonus > 0 and combo_count >= 3:
 				hit_damage += 1 # 重锤 + 连击：連击热度达到 3 后再加一伤害
 			build.progress("berserker", self)
-			hit_damage += build.damage_bonus()
+			hit_damage += build.damage_bonus() + build.consume_focus(self)
+			if combo_count == 5:
+				build.progress("steadiness", self)
 			var critical: bool = build.roll_critical()
 			if critical:
 				hit_damage *= 2
@@ -1355,6 +1357,7 @@ func strike(point: Vector2) -> void:
 			wheel.on_missed_swing()
 	if not landed: # 挥空的"风声"要比命中轻，否则每次空挥都像打到了东西
 		stamina = maxf(0.0, stamina - float(settings.get("stamina_miss_extra", 0.0)))
+		build.register_miss(self)
 		Sound.play("miss", 1.0, 0.7)
 
 ## 转盘金猪的结算：固定 +¥200（不吃卡片/连击加成），压扁回弹之后由转盘层引爆金币特效
