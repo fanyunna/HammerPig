@@ -1,0 +1,577 @@
+extends Node
+
+## 第十一轮：天数里程碑小游戏 —— 当铺砍价 / 赌桌比大小 / 催债电话连打。
+## 设计案：docs/round11-minigames-design.md。调度 + 三个玩法合并成一个模块：
+## 它们共享同一块面板骨架（Rect2 290,84,700,632）和确认按钮，拆三份只会重复。
+## 低侵入契约（main 只碰这些）：
+##   setup(host) / reset_run() / is_open() / handle_click(point) / handle_key(code)
+##   输入转发、整局暂停由 main 负责；动画与调度在本模块自己的 _process 里。
+
+const PANEL_RECT := Rect2(290, 84, 700, 632)
+const CONFIRM_RECT := Rect2(545, 648, 190, 50) # 结果态的「收下」，与转盘同位
+const SCHEDULE := {2: "pawn", 4: "dice", 6: "calls"} # 天数 → 玩法
+const MAX_PER_RUN := 3
+const GAP_SECONDS := 0.5 # 两场事件之间的最短间隔
+
+# —— 当铺砍价 ——
+const PAWN_BASE := 180
+const PAWN_CENTER := 1.45 # 指针中值：区间 0.7 ~ 2.2 的正中
+const PAWN_AMP := 0.75
+const PAWN_PERIOD := 1.4 # 第一刀的摆动周期（秒）
+const PAWN_PERIOD_2 := 1.15 # 第二刀加速 20%
+const PAWN_REROLL_RECT := Rect2(325, 648, 190, 50)
+
+# —— 赌桌 ——
+const BET_RECTS := [Rect2(320, 560, 170, 54), Rect2(515, 560, 170, 54), Rect2(710, 560, 170, 54)]
+const HIT_RECT := Rect2(400, 560, 180, 54)
+const STAND_RECT := Rect2(700, 560, 180, 54)
+const DEALER_STAND := 17
+const POOR_WIN := 80 # 赊账局的赏金
+const POOR_FAIL_STAMINA := 20.0
+
+# —— 催债电话 ——
+const CALL_SLOTS := [Vector2(400, 250), Vector2(660, 220), Vector2(900, 270), Vector2(430, 440), Vector2(680, 480), Vector2(905, 440)]
+const CALL_RADIUS := 56.0
+const CALL_COUNTS := [4, 5, 6]
+const CALL_MEMO := [1.5, 1.3, 1.1]
+const CALL_PLAY := [6.0, 5.5, 5.0]
+const CALL_REWARD := 120
+const CALL_FAIL_STAMINA := 45.0
+
+var main # 主游戏节点（main.gd），setup() 注入
+var served := 0 # 本局已发的事件数（上限 MAX_PER_RUN）
+var last_day := 0 # 已处理到的日历天数：跨天只发新里程碑，不重发
+var pending: Array[String] = [] # 排队中的事件：一次只放一场，被打断就顺延
+var gap_t := 0.0
+var active := "" # "" / pawn / dice / calls
+
+# —— 当铺状态 ——
+var pawn_state := "" # swing / preview / result
+var pawn_t := 0.0 # 指针相位
+var pawn_period := PAWN_PERIOD
+var pawn_clicks := 0 # 0 = 第一刀待砍，1 = 只剩最后一刀
+var pawn_locked_mul := 0.0 # 第一刀锁定的倍率
+var pawn_final := false # 已经砍到第二刀（结果不可反悔）
+var pawn_item := "" # 典当品名
+
+# —— 赌桌状态 ——
+var dice_state := "" # bet / player / dealer / result
+var dice_bet := 0
+var dice_poor := false # 余额不足 ¥50：赊账局
+var dice_hand: Array[int] = []
+var dice_dealer: Array[int] = []
+var dice_outcome := "" # win / lose / push
+var forced_deck: Array[int] = [] # 测试专用：非空时发牌只从这里取
+
+# —— 电话状态 ——
+var calls_state := "" # memo / play / result
+var calls_round := 0 # 第几次触发：难度按它取档
+var calls_seq: Array[int] = []
+var calls_next := 0 # 玩家点到序列第几位
+var calls_done: Array[bool] = []
+var calls_t := 0.0 # memo 每个气泡的停留 / play 剩余时间
+var calls_memo_i := 0
+var calls_win := false
+var forced_sequence: Array[int] = [] # 测试专用：非空时直接用它当铃声顺序
+
+func setup(host) -> void:
+	main = host
+
+func is_open() -> bool:
+	return active != ""
+
+func reset_run() -> void:
+	last_day = 1 if main == null else int(main.game_day)
+	served = 0
+	pending.clear()
+	gap_t = 0.0
+	active = ""
+	pawn_state = ""
+	dice_state = ""
+	calls_state = ""
+	calls_round = 0
+	forced_deck.clear()
+	forced_sequence.clear()
+
+# ---------------------------------------------------------------- 调度
+
+func _process(delta: float) -> void:
+	if main == null:
+		return
+	gap_t = maxf(0.0, gap_t - delta)
+	_schedule_check()
+	if active == "pawn" and pawn_state == "swing":
+		pawn_t += delta
+	if active == "calls" and calls_state == "memo":
+		calls_t -= delta
+		if calls_t <= 0.0:
+			calls_memo_i += 1
+			if calls_memo_i >= calls_seq.size():
+				calls_state = "play"
+				calls_t = float(CALL_PLAY[mini(calls_round, CALL_PLAY.size() - 1)])
+			else:
+				calls_t = float(CALL_MEMO[mini(calls_round, CALL_MEMO.size() - 1)]) / float(calls_seq.size())
+	elif active == "calls" and calls_state == "play":
+		calls_t -= delta
+		if calls_t <= 0.0:
+			_calls_end(false) # 超时：和点错一样判负
+
+func _schedule_check() -> void:
+	var day := int(main.game_day)
+	if day > last_day: # 跨过的里程碑全部入队（advance_calendar 一帧可能跨多天）
+		for m in range(last_day + 1, day + 1):
+			if SCHEDULE.has(m) and served < MAX_PER_RUN:
+				pending.append(String(SCHEDULE[m]))
+		last_day = day
+	if pending.is_empty() or active != "" or gap_t > 0.0:
+		return
+	if not _can_open():
+		return # 账单考核 / 转盘 / 弹窗在场：顺延，不丢弃
+	served += 1
+	_open(pending.pop_front())
+	gap_t = GAP_SECONDS
+
+func _can_open() -> bool:
+	return main.phase == "playing" and not main.intro_open \
+		and not main.wheel.is_open() and not main.build.panel_open \
+		and not main.bill_open and main.bill_detail < 0 \
+		and not main.quick_bill_hover() and not main.help_open \
+		and main.pending_challenge.is_empty() \
+		and main.gamble_state != "flip" and main.gamble_state != "result"
+
+func _open(id: String) -> void:
+	active = id
+	match id:
+		"pawn":
+			pawn_state = "swing"
+			pawn_t = -PAWN_PERIOD * 0.25 # 从最低点起摆：指针一开始就贴着 0.7x
+			pawn_period = PAWN_PERIOD
+			pawn_clicks = 0
+			pawn_locked_mul = 0.0
+			pawn_final = false
+			pawn_item = _pawn_pick_item()
+			Sound.play("card")
+		"dice":
+			dice_poor = int(main.score) < 50
+			dice_state = "bet"
+			dice_hand.clear()
+			dice_dealer.clear()
+			dice_outcome = ""
+			Sound.play("card")
+		"calls":
+			calls_round += 1
+			var count := int(CALL_COUNTS[mini(calls_round - 1, CALL_COUNTS.size() - 1)])
+			calls_seq.clear()
+			if not forced_sequence.is_empty():
+				for i in range(mini(count, forced_sequence.size())):
+					calls_seq.append(int(forced_sequence[i]))
+			else:
+				var bag: Array[int] = []
+				for i in range(count):
+					bag.append(i)
+				while bag.size() > 0: # 洗牌
+					var pick := randi() % bag.size()
+					calls_seq.append(bag[pick])
+					bag.remove_at(pick)
+			calls_next = 0
+			calls_done.clear()
+			for i in range(count):
+				calls_done.append(false)
+			calls_memo_i = 0
+			calls_win = false
+			calls_state = "memo"
+			calls_t = float(CALL_MEMO[mini(calls_round - 1, CALL_MEMO.size() - 1)]) / float(calls_seq.size())
+			Sound.play("stamp", 0.7)
+
+func _pawn_pick_item() -> String:
+	var types: Array = main.settings.get("pig_types", [])
+	if types.is_empty():
+		return "旧陶猪"
+	var t: Dictionary = types[randi() % types.size()]
+	return String(t.get("label", "陶猪")) + " ×3"
+
+func pawn_mul_now() -> float:
+	return clampf(PAWN_CENTER + PAWN_AMP * sin(TAU * pawn_t / pawn_period), 0.7, 2.2)
+
+func _close() -> void:
+	active = ""
+	gap_t = GAP_SECONDS
+	main.queue_redraw()
+
+# ---------------------------------------------------------------- 输入
+
+func handle_click(point: Vector2) -> bool:
+	if active == "":
+		return false
+	match active:
+		"pawn":
+			_pawn_click(point)
+		"dice":
+			_dice_click(point)
+		"calls":
+			_calls_click(point)
+	return true
+
+func handle_key(keycode: int) -> bool:
+	if active == "":
+		return false
+	if active == "calls" and calls_state == "play" and keycode >= KEY_1 and keycode <= KEY_6:
+		_calls_pick(int(keycode - KEY_1))
+		return true
+	if keycode == KEY_SPACE or keycode == KEY_ENTER:
+		if active == "pawn":
+			if pawn_state == "preview":
+				_pawn_accept() # 空格 = 接受第一刀的开价
+				return true
+			if pawn_state == "result":
+				_close()
+				return true
+		if active == "dice" and dice_state == "result":
+			_close()
+			return true
+		if active == "calls" and calls_state == "result":
+			_close()
+			return true
+	return true # 弹窗开着时其余按键一律吞掉
+
+# ---------------------------------------------------------------- 当铺砍价
+
+func _pawn_click(point: Vector2) -> void:
+	if pawn_state == "swing":
+		if not PANEL_RECT.grow(-10).has_point(point):
+			return # 点面板外不算：防止误触把刀砍下去
+		var mul := pawn_mul_now()
+		if pawn_final: # 第二刀：锁定即成交
+			_pawn_apply(mul)
+			return
+		pawn_locked_mul = mul
+		pawn_state = "preview"
+		Sound.play("click")
+		return
+	if pawn_state == "preview":
+		if CONFIRM_RECT.has_point(point):
+			_pawn_accept()
+		elif PAWN_REROLL_RECT.has_point(point): # 再砍一次：更快，也更高风险
+			pawn_clicks = 1
+			pawn_final = true
+			pawn_period = PAWN_PERIOD_2
+			pawn_t = -pawn_period * 0.25
+			pawn_state = "swing"
+			Sound.play("click")
+	elif pawn_state == "result" and CONFIRM_RECT.has_point(point):
+		_close()
+
+func _pawn_accept() -> void:
+	_pawn_apply(pawn_locked_mul)
+
+func _pawn_apply(mul: float) -> void:
+	var price := int(round(PAWN_BASE * mul))
+	main.score += price
+	pawn_state = "result"
+	pawn_locked_mul = mul
+	main.popups.append({"position": Vector2(640, 420), "life": 1.4,
+		"text": "典当成交 +¥" + str(price)})
+	Sound.play("cash", 1.0 if mul < 1.6 else 1.1)
+	if mul >= 1.6:
+		main.shake = 0.1 # 高价区：给一记小小的到手震
+
+# ---------------------------------------------------------------- 赌桌比大小
+
+func _draw_card() -> int:
+	if not forced_deck.is_empty():
+		return int(forced_deck.pop_front())
+	return randi_range(1, 13)
+
+func hand_value(hand: Array[int]) -> int:
+	var total := 0
+	var aces := 0
+	for r in hand:
+		if r == 1:
+			total += 1
+			aces += 1
+		else:
+			total += mini(r, 10)
+	while aces > 0 and total + 10 <= 21: # A 先按 1 算，塞得下就升到 11
+		total += 10
+		aces -= 1
+	return total
+
+func _dice_click(point: Vector2) -> void:
+	if dice_state == "bet":
+		if dice_poor:
+			if CONFIRM_RECT.has_point(point):
+				_dice_deal(0)
+			return
+		for i in range(BET_RECTS.size()):
+			if BET_RECTS[i].has_point(point):
+				var bet := 0
+				match i:
+					0: bet = 50
+					1: bet = 120
+					2: bet = clampi(int(main.score) * 3 / 10, 50, int(main.score) * 35 / 100) # 30% 余额，硬上限 35%
+				_dice_deal(bet)
+				return
+	elif dice_state == "player":
+		if HIT_RECT.has_point(point):
+			dice_hand.append(_draw_card())
+			Sound.play("card")
+			if hand_value(dice_hand) > 21:
+				_dice_settle()
+			elif dice_hand.size() >= 5: # 五张即封顶：自动停牌
+				_dice_stand()
+		elif STAND_RECT.has_point(point):
+			_dice_stand()
+	elif dice_state == "result" and CONFIRM_RECT.has_point(point):
+		_close()
+
+func _dice_deal(bet: int) -> void:
+	dice_bet = bet
+	dice_hand.clear()
+	dice_dealer.clear()
+	dice_hand.append(_draw_card())
+	dice_hand.append(_draw_card())
+	dice_dealer.append(_draw_card())
+	dice_dealer.append(_draw_card()) # 庄家第二张背面朝下，摊牌才翻开
+	dice_state = "player"
+	Sound.play("card")
+
+func _dice_stand() -> void:
+	dice_state = "dealer"
+	while hand_value(dice_dealer) < DEALER_STAND: # 庄家 17 点停牌（可预期，不作弊）
+		dice_dealer.append(_draw_card())
+	_dice_settle()
+
+func _dice_settle() -> void:
+	dice_state = "result"
+	var pv := hand_value(dice_hand)
+	var dv := hand_value(dice_dealer)
+	if pv > 21:
+		dice_outcome = "lose"
+	elif dv > 21 or pv > dv:
+		dice_outcome = "win"
+	elif pv < dv:
+		dice_outcome = "lose"
+	else:
+		dice_outcome = "push"
+	match dice_outcome:
+		"win":
+			if dice_poor:
+				main.score += POOR_WIN
+				main.popups.append({"position": Vector2(640, 420), "life": 1.4, "text": "赊账局赢了 +¥" + str(POOR_WIN)})
+			else:
+				main.score += dice_bet
+				main.popups.append({"position": Vector2(640, 420), "life": 1.4, "text": "赌桌赢钱 +¥" + str(dice_bet)})
+			Sound.play("cash", 1.05)
+		"lose":
+			if dice_poor:
+				main.stamina = maxf(6.0, main.stamina - POOR_FAIL_STAMINA)
+				main.stamina_flash = 0.6
+				main.popups.append({"position": Vector2(640, 420), "life": 1.4, "text": "赊账局输了 · 力竭"})
+			else:
+				main.score = maxi(0, int(main.score) - dice_bet)
+				main.popups.append({"position": Vector2(640, 420), "life": 1.4, "text": "赌桌输掉 -¥" + str(dice_bet)})
+			Sound.play("stamp", 0.7)
+		"push":
+			main.popups.append({"position": Vector2(640, 420), "life": 1.2, "text": "平局 · 押注退回"})
+
+# ---------------------------------------------------------------- 催债电话连打
+
+func _calls_click(point: Vector2) -> void:
+	if calls_state != "play":
+		return
+	for i in range(mini(calls_seq.size(), CALL_SLOTS.size())):
+		var c: Vector2 = CALL_SLOTS[i]
+		if Vector2(c.x, c.y).distance_to(point) <= CALL_RADIUS and not calls_done[i]:
+			_calls_pick(i)
+			return
+
+func _calls_pick(i: int) -> void:
+	if i >= calls_seq.size() or calls_done[i]:
+		return
+	if i == calls_seq[calls_next]: # 顺序对：挂掉一个
+		calls_done[i] = true
+		calls_next += 1
+		Sound.play("click", 1.0 + 0.06 * calls_next)
+		if calls_next >= calls_seq.size():
+			_calls_end(true)
+	else: # 点错：立即判负，不重试
+		_calls_end(false)
+
+func _calls_end(win: bool) -> void:
+	calls_state = "result"
+	calls_win = win
+	if win:
+		main.score += CALL_REWARD
+		# 顺手把房东的下一轮催收往后推一个门槛：这一单算你把催收员打发掉了
+		main.bills_fx.collection_next += main.bills_fx.number("collection", "progress_threshold", 100.0)
+		main.popups.append({"position": Vector2(640, 420), "life": 1.4, "text": "全部挂断 +¥" + str(CALL_REWARD)})
+		Sound.play("cash", 1.05)
+	else:
+		main.stamina = maxf(6.0, main.stamina - CALL_FAIL_STAMINA)
+		main.stamina_flash = 0.6
+		main.popups.append({"position": Vector2(640, 420), "life": 1.4, "text": "没挂完 · 力竭 -" + str(int(CALL_FAIL_STAMINA)) + " 体力"})
+		Sound.play("stamp", 0.7)
+
+# ---------------------------------------------------------------- 绘制
+
+func draw(p) -> void:
+	## 由 main 在自己的 _draw() 末尾调用：text/panel/button 都画在 main 的画布上。
+	if main == null or active == "":
+		return
+	p.panel(PANEL_RECT, Color("#37251a"), 18)
+	p.draw_rect(PANEL_RECT.grow(-4), Color("#e0b552"), false, 2.0) # 暖黄描边，和转盘一个基调
+	match active:
+		"pawn":
+			_draw_pawn()
+		"dice":
+			_draw_dice()
+		"calls":
+			_draw_calls()
+
+func _panel_title(title: String, hint: String) -> void:
+	var p = main
+	p.text_center(title, PANEL_RECT.get_center().x, PANEL_RECT.position.y + 44, 26, Color("#efbc72"))
+	p.text_center(hint, PANEL_RECT.get_center().x, PANEL_RECT.position.y + 78, 15, Color("#b59a7c"))
+
+func _draw_pawn() -> void:
+	var p = main
+	_panel_title("当铺砍价", "老板眯着眼：「这猪成色一般，你看着办。」")
+	var cx := PANEL_RECT.get_center().x
+	p.text_center("典当品：" + pawn_item, cx, 240, 20, Color("#e7c98a"))
+	var bar := Rect2(360, 300, 560, 46)
+	# 三档价格区：灰 0.7~1.0 / 黄 1.0~1.6 / 红 1.6~2.2
+	var zones := [[0.7, 1.0, Color("#554636")], [1.0, 1.6, Color("#8a6a2c")], [1.6, 2.2, Color("#a5432a")]]
+	for z in zones:
+		var x0 := bar.position.x + bar.size.x * (float(z[0]) - 0.7) / 1.5
+		var x1 := bar.position.x + bar.size.x * (float(z[1]) - 0.7) / 1.5
+		p.panel(Rect2(x0, bar.position.y, x1 - x0, bar.size.y), z[2], 4)
+	for i in range(4): # 刻度：0.7 / 1.2 / 1.7 / 2.2
+		var mul := 0.7 + 0.5 * i
+		var x := bar.position.x + bar.size.x * (mul - 0.7) / 1.5
+		p.draw_line(Vector2(x, bar.end.y), Vector2(x, bar.end.y + 8), Color("#b59a7c"), 1.5)
+		p.text_center(("%.1f" % mul) + "x", x, bar.end.y + 22, 13, Color("#b59a7c"))
+	var mul_now := pawn_locked_mul if pawn_state != "swing" else pawn_mul_now()
+	var needle_x := bar.position.x + bar.size.x * (mul_now - 0.7) / 1.5
+	var hot := mul_now >= 1.6
+	p.draw_line(Vector2(needle_x, bar.position.y - 14), Vector2(needle_x, bar.end.y + 4),
+		Color("#ffe092") if hot else Color("#f4e0b8"), 4.0)
+	p.draw_polygon(PackedVector2Array([Vector2(needle_x - 10, bar.position.y - 26), Vector2(needle_x + 10, bar.position.y - 26),
+		Vector2(needle_x, bar.position.y - 10)]), PackedColorArray([Color("#ffe092"), Color("#ffe092"), Color("#ffe092")]))
+	var price := int(round(PAWN_BASE * mul_now))
+	var tag := "当前开价"
+	if pawn_state == "swing" and pawn_clicks == 1:
+		tag = "最后一刀"
+	p.text_center(tag + "：¥" + str(price), cx, 420, 30, Color("#ffe092") if hot else Color("#efbc72"))
+	match pawn_state:
+		"swing":
+			p.text_center("点面板内任意位置下刀" + ("（就这一锤子买卖了）" if pawn_final else "（第一刀，砍完还能再砍一次）"),
+				cx, 470, 15, Color("#b59a7c"))
+		"preview":
+			p.text_center("第一刀就值这个价 —— 收下，还是赌第二刀更快但更险？", cx, 470, 15, Color("#b59a7c"))
+			p.button(PAWN_REROLL_RECT, "再砍一次", true, Color("#a5432a"))
+			p.button(CONFIRM_RECT, "收下 ¥" + str(price))
+		"result":
+			p.text_center("成交！钱已入账，拿去还债吧。", cx, 470, 15, Color("#b59a7c"))
+			p.button(CONFIRM_RECT, "知道了")
+
+func _card_face(r: int, rect: Rect2, face_up: bool) -> void:
+	var p = main
+	p.panel(rect, Color("#241a10") if not face_up else Color("#f2e8d5"), 6)
+	if not face_up:
+		p.text_center("?", rect.get_center().x, rect.get_center().y, 24, Color("#8a6a42"))
+		return
+	var suit := r % 4
+	var suit_char: String = ["♠", "♥", "♦", "♣"][suit]
+	var red := suit == 1 or suit == 2
+	var label := str(r)
+	match r:
+		1: label = "A"
+		11: label = "J"
+		12: label = "Q"
+		13: label = "K"
+	p.text_center(label, rect.get_center().x, rect.position.y + 30, 26, Color("#c94b4b") if red else Color("#3a2c20"))
+	p.text_center(suit_char, rect.get_center().x, rect.end.y - 26, 22, Color("#c94b4b") if red else Color("#3a2c20"))
+
+func _draw_dice() -> void:
+	var p = main
+	_panel_title("赌桌比大小", "余额 ¥" + str(int(main.score)) + " · 黑猪庄家推来一摞筹码：「押多少，朋友？」")
+	var cx := PANEL_RECT.get_center().x
+	match dice_state:
+		"bet":
+			if dice_poor:
+				p.text_center("兜里不足 ¥50 —— 庄家摆摆手：「赊账玩一把，赢了 ¥" + str(POOR_WIN) + "，输了掉体力。」", cx, 260, 17, Color("#e7c98a"))
+				p.button(CONFIRM_RECT, "赊账开局")
+			else:
+				p.text_center("选个押注额（押注有硬上限：余额 35%，不许梭哈破产）", cx, 240, 16, Color("#b59a7c"))
+				var bet3 := clampi(int(main.score) * 3 / 10, 50, int(main.score) * 35 / 100)
+				p.button(BET_RECTS[0], "押 ¥50")
+				p.button(BET_RECTS[1], "押 ¥120")
+				p.button(BET_RECTS[2], "押 ¥" + str(bet3))
+		"player", "dealer", "result":
+			# 庄家一手（第二张在 player 阶段背面朝下）
+			var dn := dice_dealer.size()
+			for i in range(dn):
+				var rect := Rect2(cx - (dn * 86) / 2.0 + i * 86 - 35, 190, 70, 100)
+				_card_face(dice_dealer[i], rect, dice_state != "player" or i == 0)
+			p.text_center("庄家 " + (str(hand_value(dice_dealer)) if dice_state != "player" else "?"), cx, 320, 17, Color("#b59a7c"))
+			# 玩家一手
+			var pn := dice_hand.size()
+			for i in range(pn):
+				var rect := Rect2(cx - (pn * 86) / 2.0 + i * 86 - 35, 360, 70, 100)
+				_card_face(dice_hand[i], rect, true)
+			var pv := hand_value(dice_hand)
+			var pv_color := Color("#e06c5c") if pv > 21 else Color("#efbc72")
+			p.text_center("你 " + str(pv) + ("（爆了！）" if pv > 21 else ""), cx, 490, 20, pv_color)
+			var wager := POOR_WIN if dice_poor else dice_bet
+			match dice_state:
+				"player":
+					p.text_center(("赊账局：" if dice_poor else "押注 ¥" + str(dice_bet) + "：") + "要牌，还是停牌？（最多五张）", cx, 530, 15, Color("#b59a7c"))
+					p.button(HIT_RECT, "要牌 [1]")
+					p.button(STAND_RECT, "停牌 [2]")
+				"dealer":
+					p.text_center("庄家翻牌……", cx, 530, 15, Color("#b59a7c"))
+				"result":
+					var line := ""
+					match dice_outcome:
+						"win": line = "你赢了 +¥" + str(wager)
+						"lose": line = "庄家收走了你的钱" if not dice_poor else "输了 · 力竭"
+						"push": line = "平局，押注退回"
+					p.text_center(line, cx, 530, 20, Color("#ffe092") if dice_outcome == "win" else Color("#e7c98a"))
+					p.button(CONFIRM_RECT, "离开赌桌")
+
+func _draw_calls() -> void:
+	var p = main
+	var round_label := "第 " + str(calls_round) + " 波"
+	var status := "看好响铃顺序……"
+	if calls_state == "play":
+		status = "按顺序点掉来电！" + ("（剩 " + str(int(ceil(calls_t))) + "s）" if calls_t < 3.0 else "")
+	elif calls_state == "result":
+		status = "全挂断了，清静。" if calls_win else "顺序错了 / 超时了 —— 催收员还在线上。"
+	_panel_title("催债电话连打", round_label + " · " + status)
+	var cx := PANEL_RECT.get_center().x
+	for i in range(mini(calls_seq.size(), CALL_SLOTS.size())):
+		var c: Vector2 = CALL_SLOTS[i]
+		var num := i + 1
+		var dimmed: bool = calls_state == "play" and calls_done[i]
+		var ring := Color("#ffe092")
+		if calls_state == "memo" and calls_seq[calls_memo_i] == i:
+			ring = Color("#ffe092") # 记忆阶段：正在响的那枚
+		elif calls_state == "play" and not dimmed:
+			ring = Color("#e0503f")
+		else:
+			ring = Color("#5a5148") if not dimmed else Color("#3a332c")
+		p.draw_circle(c, CALL_RADIUS + 6.0, Color(0.09, 0.06, 0.04, 0.85))
+		p.draw_arc(c, CALL_RADIUS + 6.0, 0.0, TAU, 40, ring, 2.5)
+		p.draw_circle(c, CALL_RADIUS, Color("#241a10") if not dimmed else Color("#1a140c"))
+		# 响铃动画：记忆阶段高亮气泡时画一圈扩散的波
+		if calls_state == "memo" and calls_seq[calls_memo_i] == i:
+			var wave := 6.0 + 10.0 * (1.0 - calls_t / maxf(0.01, float(CALL_MEMO[mini(calls_round - 1, CALL_MEMO.size() - 1)]) / float(calls_seq.size())))
+			p.draw_arc(c, CALL_RADIUS + wave, 0.0, TAU, 32, Color(1.0, 0.87, 0.57, 0.4), 2.0)
+		p.text_center(str(num), c.x, c.y, 30, Color("#efbc72") if not dimmed else Color("#554636"))
+	match calls_state:
+		"result":
+			var line := "+¥" + str(CALL_REWARD) + " · 房东的下一轮催收推迟了" if calls_win else "体力 -" + str(int(CALL_FAIL_STAMINA))
+			p.text_center(line, cx, 560, 16, Color("#b59a7c"))
+			p.button(CONFIRM_RECT, "收下" if calls_win else "认了")
+		"play":
+			p.text_center("错一次就前功尽弃", cx, 560, 14, Color("#554636"))

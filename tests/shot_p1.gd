@@ -127,6 +127,33 @@ func run() -> void:
 	await snap("tmp_p1_bounty_armed.png")
 	game.bounty_armed = false
 
+	# 天数里程碑小游戏：当铺 / 赌桌 / 电话
+	print("STEP day events")
+	game.day_events._open("pawn")
+	game.day_events.pawn_t = 0.1 # 摆到中高价区，看指针与三档色带
+	await snap("tmp_p1_pawn.png")
+	game.day_events._close()
+
+	game.day_events._open("dice")
+	game.day_events.forced_deck.assign([10, 13, 8, 6, 6])
+	game.day_events.handle_click(Vector2(game.day_events.BET_RECTS[0].get_center()))
+	await snap("tmp_p1_dice.png")
+	game.day_events.handle_click(Vector2(game.day_events.STAND_RECT.get_center())) # 20 对 20 → 平局结算
+	await snap("tmp_p1_dice_result.png")
+	game.day_events._close()
+	game.day_events.forced_deck.clear()
+
+	game.day_events._open("calls")
+	game.day_events.forced_sequence.assign([3, 1, 0, 2])
+	for i in range(3):
+		game.day_events._process(0.1) # 记忆阶段：第一枚气泡高亮响铃
+	await snap("tmp_p1_calls_memo.png")
+	for i in range(10):
+		game.day_events._process(0.5) # 进入复现阶段
+	await snap("tmp_p1_calls_play.png")
+	game.day_events._close()
+	game.day_events.forced_sequence.clear()
+
 	# 代价型新卡：描述比老卡长，检查会不会溢出卡片
 	print("STEP card")
 	game.phase = "card"

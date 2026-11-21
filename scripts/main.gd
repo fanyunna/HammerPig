@@ -103,6 +103,7 @@ const BillManagerScript := preload("res://scripts/bill_manager.gd")
 const Hammer3DScript := preload("res://scripts/hammer3d.gd")
 const WheelScript := preload("res://scripts/lucky_wheel.gd")
 const CardBuildScript := preload("res://scripts/card_build.gd")
+const DayEventsScript := preload("res://scripts/day_events.gd")
 var bills_fx # 账单效果：电费停电 / 信用卡利息 / 房租催收（BillManagerScript 实例）
 var hammer3d # 独立透明视口中的立体锤光标
 var earned_total := 0 # 本局累计赚到的钱（房租催收按它跨阈值触发）
@@ -142,6 +143,7 @@ var coin_uid := 0 # 金币的身份证号：3D 舞台靠它把"同一枚币"的�
 var double_timer := 0.0
 var wheel # 幸运转盘：独立子节点，低侵入，只读写 main 的公开状态
 var build # 卡片2.0：构筑/成长卡系统（合并版移植），低侵入
+var day_events # 天数里程碑小游戏（当铺/赌桌/电话）：独立子节点，低侵入
 var combo_count := 0
 var combo_timer := 0.0
 var combo_max := 0
@@ -184,6 +186,9 @@ func _ready() -> void:
 	bill_data = parsed_bills if parsed_bills is Dictionary else {}
 	bills_fx = BillManagerScript.new()
 	build = CardBuildScript.new() # 卡片2.0：RefCounted，不进场景树，只吃 main 的公开状态
+	day_events = DayEventsScript.new()
+	add_child(day_events)
+	day_events.setup(self)
 	load_meta()
 	bills_fx.setup(bill_data)
 	bills_fx.collection_triggered.connect(_on_collection_triggered)
@@ -1040,6 +1045,7 @@ func reset_game() -> void:
 	if wheel != null:
 		wheel.reset_run() # 新局：机会/连击/三个 buff 计时全部清零（多余的金猪视口上面已随 pig3d 裁掉）
 	build.reset() # 新局：本局构筑卡全部清空
+	day_events.reset_run() # 新局：里程碑日程重排，排队事件清空
 	queue_redraw()
 
 func _process(delta: float) -> void:
@@ -1056,7 +1062,7 @@ func _process(delta: float) -> void:
 	if wheel != null and wheel.is_open(): # 转盘弹窗：整局暂停（猪停刷、不能砸）；转盘自己的 _process 继续转
 		queue_redraw()
 		return
-	if bill_open or bill_detail >= 0 or quick_bill_hover() or help_open or build.panel_open: # 翻账单/看构筑的时候整局都停下来：猪不走、卡不计时
+	if bill_open or bill_detail >= 0 or quick_bill_hover() or help_open or build.panel_open or day_events.is_open(): # 翻账单/看构筑/小游戏弹窗：整局都停下来
 		queue_redraw()
 		return
 	elapsed += delta
@@ -1216,6 +1222,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			build.panel_open = false
 			sync_cursor()
 			queue_redraw()
+		return
+	if day_events != null and day_events.is_open(): # 天数小游戏弹窗：吞掉一切输入，只认点击与确认键
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			day_events.handle_click(get_global_mouse_position())
+		elif event is InputEventKey and event.pressed and not event.echo:
+			day_events.handle_key(event.keycode)
 		return
 	if event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_H or (help_open and event.keycode == KEY_ESCAPE)):
 		help_open = not help_open
@@ -2770,6 +2782,7 @@ func _draw() -> void:
 		text_center("敲碎 " + str(broken) + " 只 · 成长碎片 " + str(meta_shards), 640, 531, 17)
 		text_center("游戏已暂停 · 点击任意位置或按 H / Esc 返回", 640, 575, 16, Color("#efbc72"))
 	build.draw_status(self) # 卡片2.0：C 面板提示与构筑清单，盖在最上层
+	day_events.draw(self) # 天数小游戏弹窗（当铺/赌桌/电话）：盖在一切之上，输入已被转发
 
 func draw_pig(pig: Dictionary, index: int) -> void:
 	if bool(pig.get("wheel_gold", false)):

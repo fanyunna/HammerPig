@@ -643,6 +643,18 @@ qiaozhu-main（11月10日的另一条开发线）在操作层做了手感重构�
 5. **数值**（balance.json）：`bounty_per_run: 2`（每局次数）、`bounty_reward_base: 150`、`bounty_reward_step: 100`（赢一单下一单 +¥100）、`bounty_fail_stamina: 40`。
 6. **测试**：+15 断言 → **239**，连跑 3 次全绿（零随机触发）。截图脚本加 `tmp_p1_bounty.png` / `tmp_p1_bounty_armed.png` 两态。
 
+### 8.12 第十二轮：天数里程碑小游戏（day_events.gd：当铺/赌桌/电话，2026-11-21）
+
+设计案见 `docs/round11-minigames-design.md`（按"宽松奖励型"实装，与悬赏板的输赢尺度一致）。**调度 + 三个玩法合并成一个模块** `day_events.gd`（~500 行）——它们共享面板骨架与确认按钮，拆三份只会重复；对设计案的偏离仅此一处。
+
+1. **调度**：`SCHEDULE = {2: "pawn", 4: "dice", 6: "calls"}`，每局上限 3 场。`_schedule_check()` 在自己的 `_process` 里跑：跨过的里程碑全部入队（`advance_calendar` 一帧可能跨多天），一次只放一场；账单考核 / 转盘 / 账本 / 构筑面板在场时顺延不丢弃；两场之间 `gap_t ≥ 0.5s`。零随机触发——`last_day` 锚定 `game_day`，测试可完全复现。
+2. **main 接线 6 处**：const/var/`_ready` 创建、`reset_game` 里 `reset_run()`、`_process` 暂停判断（`is_open()` 并入弹窗暂停链）、`_unhandled_input` 顶部转发点击与按键、`_draw` 末尾 `day_events.draw(self)`。⚠️ **绘制必须在 main 的画布上**：`day_events` 是 `Node`（无 `_draw`），自己画会报 "Drawing is only allowed inside this node's _draw()"——所以由 main 在 `_draw` 尾部调 `draw(p)`，内部全用 `p.text_center / p.panel / p.button`。
+3. **当铺砍价**：指针 `mul = 1.45 + 0.75·sin(2π·t/period)`，第一刀周期 1.4s；点面板内下刀 → preview（收下 / 再砍一次 1.15s 更快更险）→ 第二刀锁定即成交。基准价 ¥180 固定，区间 0.7x~2.2x，**最差也拿 ¥126**。`pawn_mul_now()` 暴露当前倍率供测试断言。
+4. **赌桌比大小**：21 点简化。押注三档 ¥50/¥120/30% 余额（硬上限 35% 防梭哈）；庄家 17 停牌可预期；五张封顶自动停牌；**发牌从 `forced_deck` 取（测试注入）**，空则随机。余额 <¥50 转赊账局：免押注，赢 +¥80，输扣体力 20。平局退回，输真扣钱（押注本身是玩法，其余两个游戏都不亏本金）。
+5. **催债电话连打**：4/5/6 个气泡按场次递增，记忆 1.5/1.3/1.1s（每个气泡依次高亮）→ 复现 6/5.5/5s；**点错一次立即判负**，超时同罪。成功 +¥120 并把 `bills_fx.collection_next` 推后一个门槛（房东下一轮催收推迟）；失败只扣体力 45（夹底 6）。`forced_sequence` 可注入铃声顺序。
+6. **数值**：全部是 `day_events.gd` 顶部常量（设计案里说写 balance.json，实际为了少一层转发留在常量区——要调难度改文件头即可）。
+7. **测试**：+25 断言 → **264**，连跑 3 次全绿。⚠️ smoke 给类型化数组注入必须用 `.assign([...])`，直接赋值字面量会报 "Invalid assignment of property or key"。⚠️ 悬赏/赌桌/电话的体力夹底都刻意留 6 点——`end_round_exhausted` 会在体力不足一击时直接结束对局，别让输一局小游戏把玩家送走。截图：`tmp_p1_pawn/dice/dice_result/calls_memo/calls_play.png` 五张。
+
 ---
 
 ## 9. 3D 视口实现（小猪、桌面与锤子）

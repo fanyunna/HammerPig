@@ -1311,6 +1311,97 @@ func run() -> void:
     game.start_bounty()
     check(game.bounty_left == 0, "bounty attempts are capped per run")
     check(game.phase == "playing", "bounty cannot start with no attempts left")
+    # —— 天数里程碑小游戏：调度 + 当铺砍价 + 赌桌比大小 + 催债电话连打 ——
+    game.reset_game()
+    check(game.day_events.served == 0 and game.day_events.pending.is_empty() and not game.day_events.is_open(),
+        "reset clears the day-event schedule")
+    check(game.day_events.last_day == int(game.game_day), "reset anchors the schedule to the current day")
+    game.game_day = 4 # 一帧跨过第 2、4 天两个里程碑
+    game.day_events._schedule_check()
+    check(game.day_events.served == 1 and game.day_events.active == "pawn" and game.day_events.pending.size() == 1,
+        "crossing two days queues both milestones and opens the oldest")
+    # —— 当铺砍价：指针 mul = 1.45 + 0.75·sin(2π·t/period)，t=0 时恰好 1.45x ——
+    var pawn_price := int(round(180 * 1.45)) # 261
+    var score_before_pawn: int = game.score
+    game.day_events.pawn_t = 0.0
+    game.day_events.handle_click(Vector2(640, 400))
+    check(game.day_events.pawn_state == "preview" and game.day_events.pawn_locked_mul == 1.45,
+        "the first pawn swing locks the current multiplier for preview")
+    game.day_events.handle_click(Vector2(game.day_events.PAWN_REROLL_RECT.get_center()))
+    check(game.day_events.pawn_state == "swing" and game.day_events.pawn_final,
+        "rerolling starts the faster final swing")
+    game.day_events.pawn_t = 0.0
+    game.day_events.handle_click(Vector2(640, 400))
+    check(game.day_events.pawn_state == "result" and game.score == score_before_pawn + pawn_price,
+        "the final swing sells at the locked price")
+    game.day_events.handle_key(KEY_SPACE)
+    check(not game.day_events.is_open(), "confirming the pawn result closes the popup")
+    # —— 赌桌：发牌从 forced_deck 取，庄家 17 停牌 ——
+    game.score = 800
+    game.day_events._open("dice")
+    check(game.day_events.dice_state == "bet" and not game.day_events.dice_poor, "the dice table opens in bet phase")
+    game.day_events.forced_deck.assign([10, 13, 8, 6, 6]) # 玩家 20，庄家 14→20
+    game.day_events.handle_click(Vector2(game.day_events.BET_RECTS[0].get_center()))
+    check(game.day_events.dice_state == "player" and game.day_events.dice_bet == 50, "betting deals the hand")
+    game.day_events.handle_click(Vector2(game.day_events.STAND_RECT.get_center()))
+    check(game.day_events.dice_state == "result" and game.day_events.dice_outcome == "push",
+        "equal totals push the bet back")
+    check(game.score == 800, "a push costs nothing")
+    game.day_events.handle_key(KEY_SPACE)
+    check(not game.day_events.is_open(), "leaving the table closes the popup")
+    game.day_events._open("dice")
+    game.day_events.forced_deck.assign([13, 12, 9, 7, 13]) # 玩家 20，要牌一张 J → 30 爆牌
+    game.day_events.handle_click(Vector2(game.day_events.BET_RECTS[1].get_center()))
+    game.day_events.handle_click(Vector2(game.day_events.HIT_RECT.get_center()))
+    check(game.day_events.dice_outcome == "lose" and game.score == 800 - 120,
+        "busting loses the wager")
+    # —— 赊账局：余额不足 ¥50 免押注，赢了只拿固定赏金 ——
+    game.score = 40
+    game.day_events._open("dice")
+    check(game.day_events.dice_poor, "a broke player gets the credit game")
+    game.day_events.forced_deck.assign([10, 9, 8, 6]) # 玩家 19，庄家 14→22 爆
+    game.day_events.handle_click(Vector2(game.day_events.CONFIRM_RECT.get_center()))
+    game.day_events.handle_click(Vector2(game.day_events.STAND_RECT.get_center()))
+    check(game.day_events.dice_outcome == "win" and game.score == 40 + 80,
+        "the credit game pays the fixed bounty on a dealer bust")
+    # —— 催债电话：记忆→复现，全对 +¥120 并推迟催收，点错立即判负只扣体力 ——
+    game.score = 500
+    game.day_events._open("calls")
+    check(game.day_events.active == "calls" and game.day_events.calls_state == "memo",
+        "the calls event opens in memo phase")
+    game.day_events.forced_sequence.assign([3, 1, 0, 2])
+    game.day_events._open("calls")
+    for i in range(12):
+        game.day_events._process(0.5) # 快进记忆阶段
+    check(game.day_events.calls_state == "play", "memo phase hands over to play phase")
+    var score_before_calls: int = game.score
+    var collection_before: float = float(game.bills_fx.collection_next)
+    var call_slots: Array = game.day_events.CALL_SLOTS
+    for idx in [3, 1, 0, 2]:
+        game.day_events.handle_click(Vector2(call_slots[idx]))
+    check(game.day_events.calls_state == "result" and game.day_events.calls_win,
+        "clicking the bell order in sequence wins")
+    check(game.score == score_before_calls + 120, "hanging up every call pays the reward")
+    check(game.bills_fx.collection_next > collection_before, "winning pushes back the landlord's next visit")
+    game.day_events.handle_key(KEY_SPACE)
+    var stamina_before_calls: float = float(game.stamina)
+    game.stamina = maxf(game.stamina, 120.0)
+    game.day_events._open("calls")
+    game.day_events.forced_sequence.assign([1, 0, 3, 2])
+    for i in range(12):
+        game.day_events._process(0.5)
+    var stamina_before_calls_fail: float = float(game.stamina)
+    game.day_events.handle_click(Vector2(call_slots[0])) # 顺序第一位是 1，点 0 就是错
+    check(game.day_events.calls_state == "result" and not game.day_events.calls_win,
+        "a wrong click fails immediately")
+    check(game.score == score_before_calls + 120, "failing the calls costs no money")
+    check(game.stamina < stamina_before_calls_fail, "failing the calls drains stamina")
+    game.day_events.handle_key(KEY_SPACE)
+    check(not game.day_events.is_open(), "confirming the calls result closes the popup")
+    # —— 三场弹窗都不会残留到新局 ——
+    game.reset_game()
+    check(not game.day_events.is_open() and game.day_events.served == 0,
+        "a new run clears any leftover day-event state")
     print("ALL ", checks, " CHECKS PASSED")
     game.queue_free() # 音效在 Sound 这个 autoload 里，不随场景释放，不用等它放完
     game = null
