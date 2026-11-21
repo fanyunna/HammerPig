@@ -1284,6 +1284,33 @@ func run() -> void:
     check(float(chain_pig.respawn) > 0.0 and game.score == s5 + 1,
         "settle_card_break pays a chain-killed pig and schedules its respawn")
 
+    # —— 悬赏板：玩家主动挑战躲催债（零随机触发，赏金递增，输了只扣体力） ——
+    game.reset_game()
+    var bounty_cap: int = int(game.settings.get("bounty_per_run", 2))
+    check(game.bounty_left == bounty_cap, "reset grants the bounty attempts")
+    var bills_before_bounty: int = game.bills.size()
+    game.start_bounty()
+    check(game.phase == "challenge" and game.card_type == "dodge", "bounty opens a dodge challenge")
+    check(game.bounty_left == bounty_cap - 1, "starting a bounty consumes one attempt")
+    check(String(game.challenge_bill_tag).is_empty(), "bounty is not bound to any bill")
+    var score_before_bounty: int = game.score
+    game.finish_challenge(true)
+    check(game.phase == "playing", "bounty success returns to playing")
+    check(game.score == score_before_bounty + int(game.settings.get("bounty_reward_base", 150)), "bounty success pays the base reward")
+    check(game.bills.size() == bills_before_bounty, "bounty success clears no bills")
+    check(game.bounty_won == 1, "bounty wins are counted for escalation")
+    game.start_bounty()
+    check(game.phase == "challenge", "the second bounty can start after a win")
+    game.stamina = maxf(game.stamina, 120.0) # 防止体力见底时失败分支被夹在底线、断言随状态漂移
+    var stamina_before_fail: float = game.stamina
+    game.finish_challenge(false)
+    check(game.phase == "playing", "bounty failure returns to playing")
+    check(game.score == score_before_bounty + int(game.settings.get("bounty_reward_base", 150)), "bounty failure costs no money")
+    check(game.stamina < stamina_before_fail, "bounty failure drains stamina")
+    check(game.stamina >= 6.0, "bounty failure leaves a sliver of stamina")
+    game.start_bounty()
+    check(game.bounty_left == 0, "bounty attempts are capped per run")
+    check(game.phase == "playing", "bounty cannot start with no attempts left")
     print("ALL ", checks, " CHECKS PASSED")
     game.queue_free() # 音效在 Sound 这个 autoload 里，不随场景释放，不用等它放完
     game = null

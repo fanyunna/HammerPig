@@ -111,6 +111,22 @@ func run() -> void:
 	await snap("tmp_p1_challenge_2d.png")
 	game.challenge3d = saved_3d
 
+	# 悬赏板：普通态 + 确认态（黄框脉冲 + "再点一次开打"）
+	print("STEP bounty")
+	game.phase = "playing"
+	game.reset_game()
+	await process_frame
+	game.intro_open = false
+	game.gamble_used = true
+	game.score = 420
+	game.stamina = 190.0
+	Input.warp_mouse(Vector2(640, 500))
+	await snap("tmp_p1_bounty.png")
+	game.bounty_armed = true
+	game.bounty_arm_t = 3.0 # 确认倒计时也要一起给，否则下一帧就被 _process 收回
+	await snap("tmp_p1_bounty_armed.png")
+	game.bounty_armed = false
+
 	# 代价型新卡：描述比老卡长，检查会不会溢出卡片
 	print("STEP card")
 	game.phase = "card"

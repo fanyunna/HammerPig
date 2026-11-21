@@ -19,6 +19,7 @@ const UPGRADE_CARD_RECTS := [Rect2(150, 270, 290, 300), Rect2(495, 270, 290, 300
 const CONTINUE_RECT := Rect2(535, 563, 210, 52)
 const INTRO_RECT := Rect2(112, 476, 234, 52) # 开场序幕的「敲开第一只」按钮
 const RESET_RECT := Rect2(1090, 36, 140, 46)
+const BOUNTY_RECT := Rect2(172, 146, 158, 84) # 悬赏板：钉在余额和体力条之间的木牌（猪活动区之外，狂敲不会误触）
 const PIG_BOUNDS := Rect2(270, 320, 740, 310) # 小猪在赌桌上的活动范围；同时决定 3D 桌板大小。
 # ↑ 纵向从 230 撑到 310：小猪要铺满整张桌子，挤在中间一条带子里看不出"满桌都是猪"
 const PIG3D_SIZE := 138.0 # 3D 猪纹理的绘制边长（基准；实际尺寸见 pig_size()，由 pig_draw_size 配置）
@@ -91,6 +92,12 @@ var pending_challenge: Dictionary = {} # 日历刚撞到期、等这一帧收尾
 var challenge_count := 0 # 本局已触发的账单考核次数（上限见 bills.json 的 challenge_max_per_run）
 var challenge_bill_tag := "" # 本次考核绑定的账单编号；空 = 不绑账单（老式通用考核）
 var challenge_label := "" # 考核面板上那句"谁到期了、多少钱"
+var bounty_left := 0 # 悬赏板：本局剩下的主动挑战次数
+var bounty_won := 0 # 已赢的悬赏单数：决定下一单的赏金
+var bounty_reward := 0 # 当前这单的赏金
+var bounty_mode := false # 本次考核是悬赏挑战：不绑账单，赢了拿赏金，输了只扣体力
+var bounty_armed := false # 点了第一下，等确认（防狂敲误触）
+var bounty_arm_t := 0.0 # 确认倒计时：超时自动取消
 var swing := 0.0
 const BillManagerScript := preload("res://scripts/bill_manager.gd")
 const Hammer3DScript := preload("res://scripts/hammer3d.gd")
@@ -994,6 +1001,11 @@ func reset_game() -> void:
 	gamble_t = 0.0
 	gamble_heads = true
 	gamble_used = false
+	bounty_left = int(settings.get("bounty_per_run", 2))
+	bounty_won = 0
+	bounty_reward = int(settings.get("bounty_reward_base", 150))
+	bounty_mode = false
+	bounty_armed = false
 	particles.clear()
 	popups.clear()
 	stamina = float(settings.get("stamina_max", 100))
@@ -1032,6 +1044,10 @@ func reset_game() -> void:
 
 func _process(delta: float) -> void:
 	quick_paid_timer = maxf(0.0, quick_paid_timer - delta)
+	if bounty_armed: # 悬赏确认倒计时：点了第一下迟迟不确认就自动收起
+		bounty_arm_t -= delta
+		if bounty_arm_t <= 0.0:
+			bounty_armed = false
 	sync_cursor() # 必须排在所有提前 return 之前：翻账本时整局是停的，但箭头得还回来
 	if hammer3d == null and not DisplayServer.get_name().contains("headless"):
 		# 编辑器热重载不会重跑 _ready()；运行中的窗口也要能补建新加入的 3D 锤子视口。
@@ -1346,6 +1362,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				Sound.play("click")
 				reset_game()
 		else: # playing：桌边那枚硬币的按钮在前面已经处理过，这里就只剩挥锤了
+			if bounty_click(point): # 悬赏板：点到了就不挥锤（第二下才真正开打）
+				queue_redraw()
+				return
 			if wheel != null and wheel.handle_click(point): # 抽奖按钮：点到了就不挥锤
 				queue_redraw()
 				return
@@ -1967,6 +1986,37 @@ func apply_card(choice := -1) -> void:
 
 ## 账单到期考核：接住 advance_calendar 挂上的那一次机会。
 ## 小额账单考「凑钱」，大额账单（房租、车险这种）考「躲催债」—— 越贵的账，催得越凶。
+## 悬赏板：玩家主动挑战躲催债。不绑账单 —— 赢了拿赏金，输了只掉体力，免去不免单。
+func start_bounty() -> void:
+	if bounty_left <= 0 or phase != "playing" or build.panel_open:
+		return
+	bounty_left -= 1
+	bounty_armed = false
+	bounty_mode = true
+	bounty_reward = int(settings.get("bounty_reward_base", 150)) + bounty_won * int(settings.get("bounty_reward_step", 100))
+	challenge_bill_tag = ""
+	challenge_label = "悬赏挑战 · 赏金 ¥" + str(bounty_reward)
+	card_type = "dodge"
+	start_challenge()
+	Sound.play("stamp", 0.9)
+
+
+## 悬赏板点击：第一下亮起确认，第二下开打。返回 true 表示这一击已被悬赏板消费。
+func bounty_click(point: Vector2) -> bool:
+	if bounty_left <= 0:
+		return false
+	if not BOUNTY_RECT.has_point(point):
+		bounty_armed = false # 点到别处：收起确认，这一下照常挥锤
+		return false
+	if bounty_armed:
+		start_bounty()
+	else:
+		bounty_armed = true
+		bounty_arm_t = 3.0
+		Sound.play("click")
+	return true
+
+
 func start_bill_challenge() -> void:
 	if pending_challenge.is_empty():
 		return
@@ -2024,6 +2074,23 @@ func finish_challenge(success: bool) -> void:
 	var bound_tag := challenge_bill_tag
 	challenge_bill_tag = ""
 	challenge_label = ""
+	if bounty_mode: # 悬赏挑战的输赢不走账单那套：赢了拿赏金，输了只扣体力
+		bounty_mode = false
+		if success:
+			score += bounty_reward
+			bounty_won += 1
+			popups.append({"position": Vector2(640, 420), "life": 1.4, "text": "悬赏兑现 +¥" + str(bounty_reward)})
+			Sound.play("cash", 1.05)
+		else:
+			var drain := float(settings.get("bounty_fail_stamina", 40))
+			stamina = maxf(6.0, stamina - drain) # 留一口气：别让玩家因为输了悬赏被体力直接送走
+			stamina_flash = 0.6
+			popups.append({"position": Vector2(640, 420), "life": 1.4, "text": "悬赏失败 · 力竭 -" + str(int(drain)) + " 体力"})
+			Sound.play("stamp", 0.6)
+		phase = "playing"
+		collected = 0
+		bill_timer = 0.0
+		return
 	if success:
 		var reward := int(settings.bill_reward)
 		score += reward
@@ -2608,6 +2675,7 @@ func _draw() -> void:
 	panel(Rect2(350, 194, 280 * clampf(stamina / stamina_max, 0.0, 1.0), 13), bar_color, 5)
 	text_at("余额 ¥", Vector2(80, 174), 17, Color("#c9b08a"))
 	text_at(str(score).pad_zeros(3), Vector2(80, 214), 32, Color("#efbc72"))
+	draw_bounty_board() # 悬赏板：钉在余额右侧的木牌
 	# 猪的价目表移到底部整行：中部这块只有 220px 宽，四种猪的名字加金额会被账单纸压住
 	# 右上角原来写着「目标 ¥120 摆脱破产」+ 一条进度条，去掉了：把目标写在脸上，玩家就是在为数字打工，
 	# 而不是"再敲一只就够"。round_target 仍然生效（攒够即结算），只是不让玩家盯着倒计时。
@@ -3110,6 +3178,31 @@ func draw_upgrade_choices() -> void:
 
 ## 考核浮层的上半屏 HUD。两种玩法只差标题/说明，排版完全一致 ——
 ## 玩家第二次遇到账单时不用重新认一遍界面。lives = 0 时不画心（凑钱那关没有命）。
+## 悬赏板木牌：钉在 HUD 的余额和体力之间。剩 0 次就褪色；确认中黄框脉冲。
+func draw_bounty_board() -> void:
+	if phase != "playing":
+		return
+	var dim := bounty_left <= 0
+	panel(BOUNTY_RECT, Color("#2c221a") if dim else Color("#3d2c1c"), 8)
+	var edge := Color("#8a6a42")
+	if bounty_armed:
+		edge = Color("#ffe092")
+		edge.a = 0.55 + 0.45 * sin(elapsed * 9.0) # 确认中脉冲：一眼看出"再点一下就开打"
+	elif dim:
+		edge = Color("#4a3a2a")
+	draw_rect(BOUNTY_RECT.grow(-3), edge, false, 2.0)
+	var cx := BOUNTY_RECT.get_center().x
+	text_center("悬赏令", cx, BOUNTY_RECT.position.y + 18, 17, Color("#efbc72") if not dim else Color("#6a5a44"))
+	if dim:
+		text_center("本局已领完", cx, BOUNTY_RECT.position.y + 44, 14, Color("#6a5a44"))
+		return
+	text_center("躲催债 · 赏金 ¥" + str(bounty_reward), cx, BOUNTY_RECT.position.y + 44, 14, Color("#e7c98a"))
+	if bounty_armed:
+		text_center("再点一次开打！", cx, BOUNTY_RECT.position.y + 66, 14, Color("#ffe092"))
+	else:
+		text_center("剩 " + str(bounty_left) + " 次 · 点击接单", cx, BOUNTY_RECT.position.y + 66, 13, Color("#b59a7c"))
+
+
 func draw_challenge_header(title: String, info: String, hint: String, lives: int) -> void:
 	panel(CHALLENGE_PANEL, Color("#1b2838"), 22)
 	var head := "账单到期 · " + title

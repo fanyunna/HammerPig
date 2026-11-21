@@ -632,6 +632,17 @@ qiaozhu-main（11月10日的另一条开发线）在操作层做了手感重构�
 8. **测试**：+40 断言 → **224**。覆盖 prepare_pool 全量卡池/已持排除、恶魔契约/赊账/狂战士/稳手/保险/收藏家/幸运效果、`settle_card_break` 入账。⚠️ **`build` 是无类型变量**，从它取返回值必须显式标类型（`var x: Array[Dictionary] = game.build.prepare_pool(...)`），`:=` 推断会直接解析报错。
 9. ⚠️ **修复了一条陈年随机翻车**：「输掉考核立刻盖章」改为意图断言（绑定标签的账单事后确实逾期），不再比较逾期总数 —— 利息单/滞纳单可能与被绑账单同标签（`tag_of` = `id#no`），盖章落在哪一张随随机账单漂移。修复后连跑 4 次全绿。
 
+### 8.11 第十一轮：悬赏板 —— 躲催债改为玩家主动触发（2026-11-21）
+
+**背景**：躲催债只在 ≥¥300 的账单到期时触发，但账单到期日是开局日 +4~16 天，而一局约 7~8 天就结算 —— 大部分对局根本等不到大额账单到期，躲催债几乎见不到。与其加随机事件（测试不可复现、打断无预期），不如把主动权交给玩家。
+
+1. **悬赏板 UI**：`BOUNTY_RECT = Rect2(172, 146, 158, 84)`，钉在 HUD 余额与体力条之间的空档 —— **刻意放在猪活动区（y≥320）之外**，狂敲不会误触。木牌三行：悬赏令 / 躲催债·赏金 ¥N / 剩 N 次·点击接单；次数用完后褪色。
+2. **两段确认**：`bounty_click(point)` 第一亮牌（`bounty_armed`，3 秒超时自动收回，`_process` 顶部倒计时）、第二下才 `start_bounty()`；点到板外照常挥锤并顺手收牌。⚠️ 测试/截图直接置 `bounty_armed = true` 时**必须同时给 `bounty_arm_t = 3.0`**，否则下一帧就被收回（截图脚本踩过）。
+3. **悬赏挑战**：`start_bounty()` 复用 `card_type = "dodge"` 的 `start_challenge()`，但 `challenge_bill_tag = ""`（不绑账单）、`challenge_label = "悬赏挑战 · 赏金 ¥N"`。`bounty_mode = true` 标记本轮考核走悬赏结算。
+4. **结算分流**：`finish_challenge()` 顶部先判 `bounty_mode`：赢 → `score += bounty_reward`、`bounty_won += 1`（赏金递增）、**不清任何账单**；输 → `stamina -= bounty_fail_stamina`（**夹底 6.0**，体力见底会触发 `end_round_exhausted` 直接结束对局，别让玩家因为输一单悬赏被送走）、不扣钱不逾期。两条路都回 `phase = "playing"`。
+5. **数值**（balance.json）：`bounty_per_run: 2`（每局次数）、`bounty_reward_base: 150`、`bounty_reward_step: 100`（赢一单下一单 +¥100）、`bounty_fail_stamina: 40`。
+6. **测试**：+15 断言 → **239**，连跑 3 次全绿（零随机触发）。截图脚本加 `tmp_p1_bounty.png` / `tmp_p1_bounty_armed.png` 两态。
+
 ---
 
 ## 9. 3D 视口实现（小猪、桌面与锤子）
