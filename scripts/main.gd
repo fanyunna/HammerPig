@@ -151,6 +151,10 @@ var day_events # 天数里程碑小游戏（当铺/赌桌/电话）：独立子�
 var combo_count := 0
 var combo_timer := 0.0
 var combo_max := 0
+var best_gain := 0 # 本局最大单笔收入（结算高光用）
+var gamble_wins := 0 # 赌桌战绩：赢的局数（结算高光用）
+var gamble_losses := 0 # 赌桌战绩：输的局数
+var hit_stop := 0.0 # 打击顿帧剩余时间：命中瞬间全场定格几帧
 var shake := 0.0
 var shake_x := 0.0
 var shake_y := 0.0
@@ -1039,6 +1043,10 @@ func reset_game() -> void:
 	combo_count = 0
 	combo_timer = 0.0
 	combo_max = 0
+	best_gain = 0
+	gamble_wins = 0
+	gamble_losses = 0
+	hit_stop = 0.0
 	shake = 0.0
 	impact_timer = 0.0
 	shake_x = 0.0
@@ -1113,6 +1121,11 @@ func _process(delta: float) -> void:
 		queue_redraw()
 		return
 	elapsed += delta
+	if hit_stop > 0.0: # 打击顿帧：命中瞬间全场定格几帧 —— 冷却/猪/计时全停，只留给眼睛
+		hit_stop = maxf(0.0, hit_stop - delta)
+		if hit_stop > 0.0: # 还没解冻：这一帧定格。大步长（卡顿后的补帧/测试跳帧）一次耗完就照常走
+			queue_redraw()
+			return
 	if score > last_observed_score: # 累计每笔新增收入；还账扣款不会倒扣进度
 		earned_total += score - last_observed_score
 	last_observed_score = score
@@ -1536,6 +1549,8 @@ func _resolve_wheel_gold_hit(pig: Dictionary) -> void:
 	pig.gold_squash = 0.34
 	var gain := 200
 	score += gain
+	if gain > best_gain:
+		best_gain = gain # 转盘金猪往往就是本局之最
 	shake = maxf(shake, float(settings.get("shake_duration", 0.12)))
 	popups.append({"position": pig.position + Vector2(0, -55), "life": 0.9,
 		"text": "+¥" + str(gain), "color": Color("#ffd76a")})
@@ -1664,6 +1679,7 @@ func strike(point: Vector2, power := 1.0) -> void:
 			if hit_damage > 0: # 断臂求生的零伤锤不吃卡片增伤
 				build.progress("berserker", self) # 狂战士训练：每命中一次记一次成长
 				hit_damage += build.damage_bonus() + build.consume_focus(self) # 暴走 +1 / 校准锤蓄伤
+				stamina = minf(float(settings.get("stamina_max", 100)), stamina + float(settings.get("stamina_hit_refund", 1.0))) # 打准了喘口气：命中回一点体力
 			if combo_count == 5:
 				build.progress("steadiness", self) # 稳手学徒：五连击计成长
 			var lucky_crit: bool = build.roll_critical() # 幸运马蹄铁的独立暴击：伤害翻倍（与本地连击暴击相互独立）
@@ -1680,6 +1696,7 @@ func strike(point: Vector2, power := 1.0) -> void:
 			impact_timer = 0.18
 			impact_broken = pig.hp <= 0
 			shake = maxf(shake, 0.065)
+			hit_stop = maxf(hit_stop, float(settings.get("hit_stop_hit", 0.06))) # 顿帧：不管碎没碎，手感都在
 			Sound.play("pop", 0.65 if impact_broken else 0.9, 0.65 if impact_broken else 0.35)
 			if bool(pig.get("wheel_gold", false)) and pig.hp <= 0: # 转盘金猪走专属结算：一锤 +¥200，压扁回弹后爆金币
 				landed = true
@@ -1723,6 +1740,8 @@ func strike(point: Vector2, power := 1.0) -> void:
 						gain *= 2 # 暴击和三连以上叠加时能滚出很高的数字，这正是"手气来了"的时刻
 					gain = roundi(float(gain) * wheel_score_mul()) # 转盘得分×2：与卡片双倍相互独立，可叠乘
 					score += gain
+					if gain > best_gain:
+						best_gain = gain # 结算高光：本局最豪的一锤
 				broken += 1
 				build.progress("hunter", self) # 猎猪执照：击碎计数成长
 				spawn_particles(pig.position, kind, gain)
@@ -1733,8 +1752,9 @@ func strike(point: Vector2, power := 1.0) -> void:
 					Sound.play("tails", 1.0, 0.45) # 下坠音：这不是好事
 				elif crit:
 					pcolor = Color("#ffd76a")
-					# 暴击的"重量"要从三个通道同时给：屏幕抖得更狠、音更高、字更大
+					# 暴击的"重量"要从三个通道同时给：屏幕抖得更狠、顿帧更长、音更高、字更大
 					shake = maxf(shake, float(settings.get("shake_duration", 0.12)) * 1.9)
+					hit_stop = maxf(hit_stop, float(settings.get("hit_stop_crit", 0.15)))
 					Sound.play("coin_land", 1.5, 0.95)
 					Sound.play("pop", 1.55)
 				else:
@@ -2155,6 +2175,8 @@ func finish_challenge(success: bool) -> void:
 		if success:
 			score += bounty_reward
 			bounty_won += 1
+			if bounty_reward > best_gain:
+				best_gain = bounty_reward # 赏金也是收入，最大单笔要算上它
 			popups.append({"position": Vector2(640, 420), "life": 1.4, "text": "悬赏兑现 +¥" + str(bounty_reward)})
 			Sound.play("cash", 1.05)
 		else:
@@ -3380,10 +3402,16 @@ func draw_finished() -> void:
 		text_center(story_line("win_title", "暂时安全"), 640, 345, 36, Color("#a4d007"))
 		text_center(story_line("win_line", "目标达成，你甩开了催债电话 —— 但桌上那叠账单，一张都没少。"), 640, 400, 22)
 	text_center("余额 ¥" + str(score) + "    敲碎 " + str(broken) + " 只", 640, 452, 26, Color("#efbc72"))
-	text_center("已还 " + str(paid_count) + " 张 · 还剩 " + str(bills.size()) + " 张（¥" + str(bills_total()) + "）", 640, 498, 20, Color("#c9b08a"))
-	text_center("永久成长：" + meta_unlock_summary() + "　·　碎片 " + str(meta_shards), 640, 536, 15, Color("#efbc72"))
+	text_center("已还 " + str(paid_count) + " 张 · 还剩 " + str(bills.size()) + " 张（¥" + str(bills_total()) + "）", 640, 492, 20, Color("#c9b08a"))
+	text_center(highlight_line(), 640, 524, 17, Color("#ffe092"))
+	text_center("永久成长：" + meta_unlock_summary() + "　·　碎片 " + str(meta_shards), 640, 550, 15, Color("#efbc72"))
 	button(LEGACY_SHOP_RECT, "传承商店")
 	button(CONTINUE_RECT, "再来一轮")
+
+
+## —— 结算高光：本局之最，让每一局都有值得记住的瞬间 ——
+func highlight_line() -> String:
+	return "本局高光：最高连击 ×" + str(combo_max) + " · 最大单笔 +¥" + str(best_gain) + " · 赌桌 " + str(gamble_wins) + "胜" + str(gamble_losses) + "负"
 
 
 ## —— 传承商店面板：碎片在这里换成永久饰品，下一局 reset_game 时生效 ——
@@ -3430,7 +3458,8 @@ func draw_bankrupt() -> void:
 	text_center(story_line("lose_title", "破产了"), 640, 345, 36, Color("#e7a6a4"))
 	text_center(story_line("lose_line", "敲碎 {broken} 只存钱罐，账单反而又多了几张。"), 640, 400, 22)
 	text_center("余额 ¥" + str(score) + "    敲碎 " + str(broken) + " 只", 640, 452, 26, Color("#efbc72"))
-	text_center("已还 " + str(paid_count) + " 张 · 还剩 " + str(bills.size()) + " 张（¥" + str(bills_total()) + "）", 640, 498, 20, Color("#c9b08a"))
-	text_center("永久成长：" + meta_unlock_summary() + "　·　碎片 " + str(meta_shards), 640, 536, 15, Color("#efbc72"))
+	text_center("已还 " + str(paid_count) + " 张 · 还剩 " + str(bills.size()) + " 张（¥" + str(bills_total()) + "）", 640, 492, 20, Color("#c9b08a"))
+	text_center(highlight_line(), 640, 524, 17, Color("#ffe092"))
+	text_center("永久成长：" + meta_unlock_summary() + "　·　碎片 " + str(meta_shards), 640, 550, 15, Color("#efbc72"))
 	button(LEGACY_SHOP_RECT, "传承商店")
 	button(CONTINUE_RECT, "再来一轮")

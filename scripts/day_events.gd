@@ -355,6 +355,7 @@ func _dice_settle() -> void:
 		dice_outcome = "push"
 	match dice_outcome:
 		"win":
+			main.gamble_wins += 1 # 结算高光：赌桌战绩
 			if dice_poor:
 				main.score += POOR_WIN
 				main.popups.append({"position": Vector2(640, 420), "life": 1.4, "text": "赊账局赢了 +¥" + str(POOR_WIN)})
@@ -363,6 +364,7 @@ func _dice_settle() -> void:
 				main.popups.append({"position": Vector2(640, 420), "life": 1.4, "text": "赌桌赢钱 +¥" + str(dice_bet)})
 			Sound.play("cash", 1.05)
 		"lose":
+			main.gamble_losses += 1 # 结算高光：赌桌战绩
 			if dice_poor:
 				main.stamina = maxf(6.0, main.stamina - POOR_FAIL_STAMINA)
 				main.stamina_flash = 0.6

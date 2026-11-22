@@ -105,6 +105,29 @@ func run() -> void:
     game._process(float(game.settings.respawn_seconds) + 0.1)
     check(game.pigs[0].hp == 2, "broken pig respawns")
 
+    # 手感三件套：命中回体力 + 打击顿帧 + 结算高光（§8.14）
+    check(float(game.settings.get("stamina_regen_per_second", 0)) >= 1.0, "stamina regen no longer punishes with a freeze")
+    check(float(game.settings.get("stamina_hit_refund", 0)) >= 1.0, "landing a hit refunds stamina")
+    check(game.best_gain >= int(game.settings.points_per_pig) and game.combo_max >= 1, "session highlights recorded on pig break")
+    var st_before = game.stamina
+    game.cooldown = 0.0
+    game.strike(game.pigs[0].position)
+    check(game.stamina == st_before - float(game.settings.stamina_cost) + float(game.settings.stamina_hit_refund), "hit refunds 1 stamina against its 3 cost")
+    check(game.hit_stop > 0.0, "a landed strike freezes the world for a few frames")
+    game.day_events.dice_hand = [10, 11] # 21 点直接摊牌：赢了要记进赌桌战绩
+    game.day_events.dice_dealer = [9, 8]
+    game.day_events.dice_poor = false
+    game.day_events.dice_bet = 10
+    var gamble_score_before = game.score
+    game.day_events._dice_settle()
+    check(game.gamble_wins >= 1 and game.score == gamble_score_before + 10, "dice win recorded in session highlights")
+    game.day_events.dice_hand = [10, 5]
+    game.day_events.dice_dealer = [9, 9]
+    game.day_events.dice_poor = false
+    game.day_events.dice_bet = 5
+    game.day_events._dice_settle()
+    check(game.gamble_losses >= 1, "dice loss recorded in session highlights")
+
     # first card -> reward（注意：卡片不再当场弹，见 §3.6 的半秒缓冲）
     game.gamble_used = true # 隔离：这段专门测卡片，别让桌边那枚硬币插进来
     for i in range(1, 6):
