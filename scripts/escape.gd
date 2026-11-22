@@ -161,6 +161,7 @@ func handle_key(keycode: int) -> void:
 ## ---------- 绘制：由 main._draw 在躲债关调用，全部画在主画布上 ----------
 func draw(p) -> void:
 	var stage: Rect2 = stage_rect
+	_draw_hud(p, stage) # 考核标题的深色大面板先画（它盖住整个舞台），场景全部画在它上面
 	_draw_backdrop(p, stage)
 	_draw_house(p, stage)
 	for o in obstacles:
@@ -168,7 +169,6 @@ func draw(p) -> void:
 	_draw_collectors(p, stage)
 	if state != "intro":
 		_draw_runner(p, stage)
-	_draw_hud(p, stage)
 	if state == "intro":
 		_draw_intro_captions(p, stage)
 	if hit_flash > 0.0:
