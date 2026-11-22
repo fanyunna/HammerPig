@@ -86,16 +86,19 @@ func run() -> void:
 		game.challenge3d._process(0.04) # 快进物理，让金币落到台面上
 	await snap("tmp_p1_challenge.png")
 
-	# 躲催债：逃跑场面（开场演出 + 双车道跑酷）
+	# 躲催债：逃跑场面（开场演出 + 鼠标自由上下跑）
 	print("STEP dodge")
 	game.card_type = "dodge"
 	game.bill_amount = 560
 	game.start_challenge()
 	game.challenge_label = "房租 ¥560"
 	game.bill_timer = 26.0
-	game.escape.forced_obstacles.assign([{"lane": 1, "kind": "bin"}, {"lane": 0, "kind": "barrier"},
-		{"lane": 1, "kind": "bin"}, {"lane": 1, "kind": "barrier"}, {"lane": 0, "kind": "bin"},
-		{"lane": 1, "kind": "bin"}, {"lane": 0, "kind": "barrier"}, {"lane": 1, "kind": "bin"}])
+	game.escape.mouse_control = false # 截图不跟鼠标：固定构图，画面才可复现
+	game.escape.target_y = game.escape._row_y(1)
+	game.escape.runner_y = game.escape.target_y
+	game.escape.forced_obstacles.assign([{"row": 2, "kind": "bin"}, {"row": 0, "kind": "barrier"},
+		{"row": 1, "kind": "bin"}, {"row": 0, "kind": "barrier"}, {"row": 2, "kind": "bin"},
+		{"row": 1, "kind": "bin"}, {"row": 0, "kind": "barrier"}, {"row": 2, "kind": "bin"}])
 	for i in range(24): # 跳过演出（2.2s）再跑 ~2.6 秒：障碍铺开、催债人吊在身后
 		game.escape.update(0.2)
 	await snap("tmp_p1_dodge.png")

@@ -254,24 +254,30 @@ func run() -> void:
     for i in range(6):
         game.escape.update(0.5) # 3 秒：演出 2.2 秒走完，最后一帧进跑酷
     check(game.escape.state == "run", "the cinematic hands over to the run")
+    game.escape.mouse_control = false # 测试不走鼠标：直接看键盘步进与目标高度
+    var y_start: float = game.escape.target_y
     game.escape.handle_key(KEY_UP)
-    check(game.escape.lane == 0, "W/S/arrow keys switch lanes")
+    check(game.escape.target_y < y_start, "up arrow lifts the runner")
     game.escape.handle_key(KEY_DOWN)
-    check(game.escape.lane == 1, "...both directions")
+    game.escape.handle_key(KEY_DOWN)
+    check(game.escape.target_y > y_start, "...and down brings him back")
     var lives_before_hit: int = game.dodge_lives
-    game.escape.forced_obstacles.assign([{"lane": 1, "kind": "bin"}]) # 主角默认在下道：必撞
+    game.escape.forced_obstacles.assign([{"row": 1, "kind": "bin"}])
     game.escape.spawn_t = 0.0 # 强迫本帧立即生成，免得长跑等待
     game.escape.update(0.2) # 障碍从右缘生成并左移
     game.escape.obstacles[0].x = game.escape._runner_x() # 直接挪到脚下，省去长跑等待
+    game.escape.obstacles[0].y = game.escape.runner_y # 同一高度：必撞
     game.escape.update(1.0 / 60.0)
     check(game.dodge_lives == lives_before_hit - 1, "hitting an obstacle gets you caught once")
-    game.escape.forced_obstacles.assign([{"lane": 1, "kind": "bin"}])
-    game.escape.lane = 0 # 换到上道：下道的障碍碰不到你
+    game.escape.forced_obstacles.assign([{"row": 0, "kind": "bin"}])
+    game.escape.target_y = game.escape._y_max() # 人贴到最近的一端
+    game.escape.runner_y = game.escape._y_max()
     game.escape.spawn_t = 0.0
     game.escape.update(0.2)
     game.escape.obstacles[0].x = game.escape._runner_x()
+    game.escape.obstacles[0].y = game.escape._y_min() # 障碍在最远的一端：够不着你
     game.escape.update(1.0 / 60.0)
-    check(game.dodge_lives == lives_before_hit - 1, "the other lane is safe")
+    check(game.dodge_lives == lives_before_hit - 1, "vertical distance is what saves you now")
     game.bill_timer = 0.05
     game._process(0.1) # 主循环里 bill_timer 递减，escape 检测到就结算
     check(game.phase == "playing" and game.score == int(game.settings.bill_reward), "surviving the run clears bill and rewards")
@@ -478,7 +484,7 @@ func run() -> void:
     check(game.cursor_hidden, "the hammer stands in for the cursor while you are playing")
     game.phase = "challenge"
     game._process(0.016)
-    check(game.cursor_hidden, "...and while you are dodging (you have to see where you are)")
+    check(not game.cursor_hidden, "...and the system cursor stays for the mouse-follow run")
     game.phase = "card"
     game._process(0.016)
     check(not game.cursor_hidden, "the system cursor comes back on the card screen")

@@ -847,7 +847,7 @@ func random_pig_velocity(type := {}) -> Vector2:
 ## 配置 hammer_cursor: false 可以彻底用回系统箭头（有人就是更习惯真的指针）。
 func sync_cursor() -> void:
 	var hide: bool = bool(settings.get("hammer_cursor", true))
-	hide = hide and (phase == "playing" or (phase == "challenge" and card_type == "dodge"))
+	hide = hide and phase == "playing" # 躲债关改成鼠标跟手：系统箭头得留着（人跟着箭头跑，锤子别挡路）
 	hide = hide and not intro_open and not bill_open and bill_detail < 0 and not quick_bill_hover() and not help_open and not (build != null and build.panel_open)
 	hide = hide and not (wheel != null and wheel.is_open()) # 转盘弹窗里得看得见箭头
 	hide = hide and not (day_events != null and day_events.is_open()) # 小游戏弹窗同理：全靠点击，藏箭头就没法玩了
@@ -2166,7 +2166,7 @@ func clear_bill_by_tag(tag: String) -> bool:
 func start_challenge() -> void:
 	phase = "challenge"
 	bill_timer = bill_time
-	sync_cursor() # 凑钱小游戏需要系统箭头点硬币；躲催债仍使用锤子光标
+	sync_cursor() # 凑钱小游戏需要系统箭头点硬币；躲债关是鼠标跟手，也留着箭头
 	if card_type == "collect":
 		collected = 0
 		coins.clear()
@@ -3228,7 +3228,7 @@ func draw_card() -> void:
 	else: # dodge
 		card_badge(accent, "¥" + str(bill_amount), 32)
 		text_center("限时 " + str(int(bill_time)) + " 秒", 640, 464, 18, Color("#c7d5e0"))
-		text_center("夺门而逃 · 沿街狂奔", 640, 486, 18, Color("#c9b08a"))
+		text_center("夺门而逃 · 鼠标上下躲", 640, 486, 18, Color("#c9b08a"))
 		text_center("被抓满 3 次就失败", 640, 508, 16, Color("#e7a6a4"))
 	button(CONTINUE_RECT, label, true, accent)
 	text_center(hint, 640, 652, 17, Color("#b1c0b8"))

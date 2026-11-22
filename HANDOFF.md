@@ -681,18 +681,21 @@ qiaozhu-main（11月10日的另一条开发线）在操作层做了手感重构�
 
 ---
 
-### 8.15 第十五轮：逃跑场面（躲催债换成"夺门而出 + 双车道跑酷"，2026-11-22）
+### 8.15 第十五轮：逃跑场面（躲催债换成"夺门而出 + 鼠标自由上下跑"，2026-11-22）
 
-用户点名参考《神庙逃亡》的"跑与躲"，不想再做面板式小游戏，想要**有动画的剧情场面**：主人公从门里逃出来、躲催债。三决策：**全部替换旧圆圈躲弹幕**、**双车道换位**、**带开场演出**。
+用户点名参考《神庙逃亡》的"跑与躲"，不想再做面板式小游戏，想要**有动画的剧情场面**：主人公从门里逃出来、躲催债。决策：**全部替换旧圆圈躲弹幕**、**带开场演出**，操作从"双车道换位"改成**鼠标自由上下跑**（用户反馈双车道太机械）。
 
 1. **新模块 `scripts/escape.gd`**（接线和 day_events 同款低侵入：`setup(host)` / `update(delta)` / `draw(p)` / `handle_click` / `handle_key` / `reset_run()`，全部画在 main 画布上）：
    - **开场演出 2.2 秒**：敲门（stamp 音）→ 门被砸开（door_open 0→1，门板"假 3D"收拢 + 门内黑洞）→ 主人公冲出。**点一下 / 空格可跳过**。
-   - **跑酷**：主人公固定 x、`↑↓/W/S` 或点击舞台上下半屏在两车道间换道（lerp 插值出滑步感）；障碍（垃圾桶/路障）从右缘以 `escape_obstacle_speed` 左移，撞上扣一颗心（`dodge_lives` 复用）并触发 0.9s 无敌闪烁；催债人吊在身后当压力可视化——**命越少贴得越近**。撑过 `bill_timer` = `finish_challenge(true)`，满 3 次抓 = `finish_challenge(false)`。
-   - **零随机复现**：`forced_obstacles` 注入 [{lane, kind}] 按序消费（测试用）。
-2. **main 接线 8 处**：preload/var/_ready 创建、`reset_game` 里 `escape.reset_run()`、`start_challenge` dodge 分支 `escape.start()`、`_process` challenge 分支 `escape.update(delta)`（替代已删除的 `update_dodge`/`spawn_dodger`）、`_draw` → `escape.draw(self)`（`draw_dodge`/`draw_dodger`/`draw_player` 已删）、challenge 点击分支转发 `escape.handle_click`、按键处理**最前部**拦截 ↑↓/W/S/空格回车（先于 B/账本）、3D 舞台只在 collect 时激活（逃跑场面是横版 2D 自绘，不走 challenge3d）。
-3. **数值**（balance.json）：`escape_obstacle_interval: 1.1`、`escape_obstacle_speed: 260`、`escape_invincible: 0.9`。
-4. **测试**：旧 dodge 断言改写为逃跑场面断言（演出→跑酷交接、换道、必撞扣命、换道躲开、撑过计时结算）——⚠️ 注入障碍前要把 `escape.spawn_t` 清零强迫本帧生成，否则 `obstacles[0]` 越界；结算用 `game._process(0.1)` 走主循环（bill_timer 由 main 递减）。shot_p1.gd 的 dodge 态改为注入 8 个障碍跑 14 帧。
-5. **状态**：Godot 被沙箱拦截没法本地跑测试，需人工验证 `ALL … CHECKS PASSED` + 截图 `tmp_p1_dodge.png`。
+   - **自由上下跑**：`runner_y` 连续跟随 `target_y`（`lerpf`，16/s）。鼠标在街道范围内**一动**就接管（`_follow_mouse`：比对 `mouse_anchor`，位移 >4px 才抢控制权，避免键盘按一格被下一帧鼠标位置盖回去；鼠标停在 UI 上不接管）。键盘 `↑↓/W/S` 每次挪 `KEY_STEP=46`，点舞台跑到点击高度。可跑区间 `_y_min()~_y_max()`（舞台 60%~95% 高）。
+   - **障碍三段高度**：`_row_y(0/1/2)` = 远/中/近，随机来；碰撞 = `|dx| <= OBSTACLE_W` 且 `|dy| <= VERT_TOL(38)`。撞上扣一颗心（复用 `dodge_lives`）+ 0.9s 无敌闪烁；催债人吊身后，**命越少贴得越近**。撑过 `bill_timer` = `finish_challenge(true)`，被抓满 3 次 = `finish_challenge(false)`。
+   - **画法**：街面加厚到 152px 给足穿插余地；人脚下有影子（自由上下跑时唯一能判断"站在哪一层"的参照），近段障碍也有影子。
+   - **零随机复现**：`forced_obstacles` 注入 `[{row|y|lane, kind}]` 按序消费（`lane` 为旧写法兼容：0→远段、1→近段）。
+2. **main 接线 8 处**：preload/var/`_ready` 创建（`add_child` + `setup` + 注入 `stage_rect = CHALLENGE_STAGE`，不跨脚本读常量）、`reset_game` 里 `escape.reset_run()`、`start_challenge` dodge 分支 `escape.start()`、`_process` challenge 分支 `escape.update(delta)`（替代已删除的 `update_dodge`/`spawn_dodger`）、`_draw` → `escape.draw(self)`（`draw_dodge`/`draw_dodger`/`draw_player` 已删）、challenge 点击分支转发 `escape.handle_click`、按键处理**最前部**拦截 ↑↓/W/S/空格回车（先于 B/账本）、3D 舞台只在 collect 时激活。
+3. **⚠️ 绘制顺序铁律**：`draw_challenge_header` 会画 `CHALLENGE_PANEL`（40,118,1200,574，盖住整个舞台），所以 `escape.draw` 必须**先画 HUD、再画场景**。反过来会把街道/房子/小人全盖掉，舞台一片空黑（本轮踩过）。
+4. **数值**（balance.json）：`escape_obstacle_interval: 1.1`、`escape_obstacle_speed: 260`、`escape_invincible: 0.9`。
+5. **测试**：演出→跑酷交接、键盘上下步进（断言 `target_y`）、必撞扣命（把障碍 `y` 设成 `runner_y`）、纵向拉开距离即安全（`y` 设成 `_y_min()`）。⚠️ 测试要先把 `escape.mouse_control = false`，否则鼠标值会覆盖目标高度；注入障碍前 `spawn_t = 0` 强迫本帧生成；结算用 `game._process(0.1)` 走主循环。
+6. **状态**：Godot 被沙箱拦截没法本地跑测试，需人工验证 `ALL … CHECKS PASSED` + 截图 `tmp_p1_dodge.png`。
 
 ---
 

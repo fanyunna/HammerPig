@@ -1,28 +1,34 @@
 extends Node
 ## 逃跑场面（第十五轮）：躲催债从"圆圈躲弹幕"升级成"夺门而出 · 沿街狂奔"。
 ## 参考《神庙逃亡》的跑与躲：
-##   开场演出（敲门 → 门被砸开 → 主人公冲出 → 催债人追出）→ 双车道跑酷 → 结算。
-## 换道：↑↓ / W / S，或点击舞台上/下半屏。撑过倒计时 = 逃脱成功（复用 finish_challenge）；
-## 被抓满 3 次 = 失败。接线和 day_events 一样低侵入：update / draw(host) / handle_click / handle_key。
-## 测试可注入 forced_obstacles（按顺序消费）实现零随机复现。
+##   开场演出（敲门 → 门被砸开 → 主人公冲出 → 催债人追出）→ 街道奔跑 → 结算。
+## 操作：鼠标自由上下跑（鼠标在街道里一动，目标高度就跟过去），键盘 ↑↓ / W S 是步进微调，
+## 点舞台也会跑到点的那个高度。障碍分远/中/近三段随机来，靠上下穿插躲。
+## 撑过倒计时 = 逃脱成功（复用 finish_challenge）；被抓满 3 次 = 失败。
+## 接线和 day_events 一样低侵入：update / draw(host) / handle_click / handle_key。
+## 测试可注入 forced_obstacles（{row|y|lane, kind}，按顺序消费）实现零随机复现。
 
 const INTRO_TIME := 2.2 # 开场演出时长（秒）：敲门 0.5 → 砸门 1.0 → 夺门而出 2.2
 const RUNNER_X_OFFSET := 250.0 # 主人公站在舞台左侧多远
 const OBSTACLE_W := 34.0 # 障碍碰撞半宽（与跑步速度一起决定反应窗口）
 const KNOCK_TIME := 0.5
 const BURST_TIME := 1.0
+const VERT_TOL := 38.0 # 上下方向的碰撞容差：离障碍这么近才算撞上
+const KEY_STEP := 46.0 # 键盘 ↑↓ 一次挪多远（鼠标接管时键盘退居微调）
 
 var main # main.gd 主脚本：只读它的计时器，结算回调 main.finish_challenge
 var stage_rect := Rect2(56, 300, 1168, 372) # 舞台像素区：由 main._ready 把 CHALLENGE_STAGE 注进来（跨脚本读常量不稳）
 var active := false # 躲债关是否进行中（state != idle）
 var state := "" # intro / run / result
 var intro_t := 0.0
-var lane := 1 # 0 = 上道（远），1 = 下道（近）
-var lane_y := 0.0 # 当前绘制 y（换道时向目标插值）
+var runner_y := 0.0 # 主人公脚底 y：鼠标自由上下跑，向 target_y 平滑插值
+var target_y := 0.0 # 目标 y（鼠标高度 / 键盘步进 / 点击落点）
+var mouse_control := true # 鼠标是否接管 y（测试关掉它，走纯键盘/直接赋值）
+var mouse_anchor := Vector2(-1.0e9, -1.0e9) # 上一帧鼠标位置：只有真的动了才抢控制权
 var run_dist := 0.0 # 已跑距离：驱动视差滚动与步伐
 var spawn_t := 0.0
 var obstacles: Array[Dictionary] = []
-var forced_obstacles: Array = [] # 测试注入：[{lane, kind}]，按顺序消费；空则随机
+var forced_obstacles: Array = [] # 测试注入：[{y|row|lane, kind}]，按顺序消费；空则随机
 var invincible_t := 0.0
 var hit_flash := 0.0 # 被抓的红边闪烁
 var run_t := 0.0 # 步伐相位
@@ -46,8 +52,10 @@ func start() -> void:
 	active = true
 	state = "intro"
 	intro_t = 0.0
-	lane = 1
-	lane_y = _lane_y(1)
+	target_y = _y_max() - 12.0 # 从近处起步：先看清街道再往前冲
+	runner_y = target_y
+	mouse_control = true
+	mouse_anchor = Vector2(-1.0e9, -1.0e9)
 	run_dist = 0.0
 	spawn_t = 0.6
 	obstacles.clear()
@@ -58,9 +66,18 @@ func start() -> void:
 	knock_shake = 0.0
 	Sound.play("stamp", 0.8, 0.5) # 敲门声
 
-func _lane_y(l: int) -> float:
-	var stage: Rect2 = stage_rect
-	return stage.position.y + stage.size.y * (0.58 if l == 0 else 0.88)
+## 可跑区域：脚底 y 的上下限。上限贴着街道远边，下限贴进画面底部
+func _y_min() -> float:
+	return stage_rect.position.y + stage_rect.size.y * 0.60
+
+func _y_max() -> float:
+	return stage_rect.position.y + stage_rect.size.y * 0.95
+
+## 障碍的三个高度段（远 / 中 / 近）：自由移动下靠上下穿插躲，而不是选一条固定的道
+func _row_y(r: int) -> float:
+	var lo := _y_min()
+	var span := _y_max() - lo
+	return lo + span * (0.0 if r <= 0 else (0.5 if r == 1 else 1.0))
 
 func _interval() -> float:
 	return float(main.settings.get("escape_obstacle_interval", 1.1))
@@ -87,8 +104,9 @@ func update(delta: float) -> void:
 		"run":
 			run_t += delta
 			run_dist += _speed() * delta * 0.35 # 视差滚动的世界速度
-			var target_y := _lane_y(lane)
-			lane_y = lerpf(lane_y, target_y, minf(1.0, delta * 14.0)) # 换道的小跳跃感
+			_follow_mouse() # 鼠标在街道里动一下：目标 y 就跟过去（自由上下跑）
+			target_y = clampf(target_y, _y_min(), _y_max())
+			runner_y = lerpf(runner_y, target_y, minf(1.0, delta * 16.0)) # 平滑跟手：不做瞬移
 			invincible_t = maxf(0.0, invincible_t - delta)
 			hit_flash = maxf(0.0, hit_flash - delta)
 			spawn_t -= delta
@@ -99,7 +117,7 @@ func update(delta: float) -> void:
 				var o: Dictionary = obstacles[i]
 				o.x -= _speed() * delta
 				var runner_x := _runner_x()
-				if absf(float(o.x) - runner_x) <= OBSTACLE_W and int(o.lane) == lane:
+				if absf(float(o.x) - runner_x) <= OBSTACLE_W and absf(float(o.get("y", runner_y)) - runner_y) <= VERT_TOL:
 					if invincible_t <= 0.0: # 撞上：被抓一次，催债人逼近
 						main.dodge_lives -= 1
 						invincible_t = float(main.settings.get("escape_invincible", 0.9))
@@ -127,15 +145,19 @@ func _runner_x() -> float:
 	return stage_rect.position.x + RUNNER_X_OFFSET
 
 func _spawn_obstacle() -> void:
+	var kinds := ["bin", "barrier", "bin"]
+	var kind := String(kinds[randi() % kinds.size()])
+	var y := _row_y(randi() % 3) # 上/中/下随机：逼你上下穿插
 	if not forced_obstacles.is_empty():
 		var f: Dictionary = forced_obstacles.pop_front()
-		obstacles.append({"lane": int(f.get("lane", 1)), "kind": String(f.get("kind", "bin")),
-			"x": stage_rect.end.x + 40.0})
-		return
-	var lane_i := randi() % 2
-	var kinds := ["bin", "barrier", "bin"]
-	obstacles.append({"lane": lane_i, "kind": kinds[randi() % kinds.size()],
-		"x": stage_rect.end.x + 40.0})
+		kind = String(f.get("kind", kind))
+		if f.has("y"):
+			y = float(f.y)
+		elif f.has("row"):
+			y = _row_y(int(f.row))
+		elif f.has("lane"): # 兼容旧写法：lane 0 当远段，lane 1 当近段
+			y = _row_y(0 if int(f.lane) == 0 else 2)
+	obstacles.append({"y": y, "kind": kind, "x": stage_rect.end.x + 40.0})
 
 ## ---------- 输入：main._unhandled_input 的 challenge 分支转发 ----------
 func handle_click(point: Vector2) -> void:
@@ -144,8 +166,7 @@ func handle_click(point: Vector2) -> void:
 		return
 	if state != "run":
 		return
-	var stage: Rect2 = stage_rect
-	lane = 0 if point.y < stage.get_center().y else 1
+	target_y = clampf(point.y, _y_min(), _y_max()) # 点到哪就跑到哪一级高度
 
 func handle_key(keycode: int) -> void:
 	if state == "intro" and (keycode == KEY_SPACE or keycode == KEY_ENTER):
@@ -154,9 +175,24 @@ func handle_key(keycode: int) -> void:
 	if state != "run":
 		return
 	if keycode == KEY_UP or keycode == KEY_W:
-		lane = 0
+		target_y = clampf(target_y - KEY_STEP, _y_min(), _y_max())
 	elif keycode == KEY_DOWN or keycode == KEY_S:
-		lane = 1
+		target_y = clampf(target_y + KEY_STEP, _y_min(), _y_max())
+
+## 鼠标自由上下跑：鼠标"真的动了"才抢控制权（否则按键挪一格会被下一帧的鼠标位置盖回去）
+## 鼠标停在界面按钮/账本上时不接管：人不会因为点了个按钮就往上飞
+func _follow_mouse() -> void:
+	if not mouse_control or main == null:
+		return
+	var m: Vector2 = main.hammer_position
+	if m.distance_squared_to(mouse_anchor) <= 16.0: # 没动：别抢键盘的目标
+		return
+	mouse_anchor = m
+	if m.y < stage_rect.position.y or m.y > stage_rect.end.y:
+		return
+	if m.x < stage_rect.position.x or m.x > stage_rect.end.x:
+		return
+	target_y = m.y
 
 ## ---------- 绘制：由 main._draw 在躲债关调用，全部画在主画布上 ----------
 func draw(p) -> void:
@@ -184,19 +220,16 @@ func _draw_backdrop(p, stage: Rect2) -> void:
 		var h := 60.0 + 22.0 * sin(x * 0.013)
 		p.panel(Rect2(x, stage.end.y - 130.0 - h, 70.0, h + 130.0), Color("#3d2a16"), 6)
 		x += spacing
-	# 街面
-	p.panel(Rect2(stage.position.x, stage.end.y - 96.0, stage.size.x, 96.0), Color("#57402a"), 0)
-	p.panel(Rect2(stage.position.x, stage.end.y - 96.0, stage.size.x, 6.0), Color("#6b5238"), 0)
+	# 街面：给足 152px 厚度，人才有上下穿插的余地
+	p.panel(Rect2(stage.position.x, stage.end.y - 152.0, stage.size.x, 152.0), Color("#57402a"), 0)
+	p.panel(Rect2(stage.position.x, stage.end.y - 152.0, stage.size.x, 6.0), Color("#6b5238"), 0)
 	# 路中虚线
 	var dash := 34.0
 	var doff := fmod(run_dist, dash * 2.0)
 	var lx := stage.position.x - doff
 	while lx < stage.end.x:
-		p.panel(Rect2(lx, stage.end.y - 52.0, 20.0, 4.0), Color("#8a6a4a"), 2)
+		p.panel(Rect2(lx, stage.end.y - 60.0, 20.0, 4.0), Color("#8a6a4a"), 2)
 		lx += dash * 2.0
-	# 上下道分隔的浅色提示带
-	p.draw_line(Vector2(stage.position.x, _lane_y(0) + 26.0), Vector2(stage.end.x, _lane_y(0) + 26.0),
-		Color(0.7, 0.6, 0.45, 0.25), 2.0)
 
 func _draw_house(p, stage: Rect2) -> void:
 	# 家：开场时在门口，随奔跑向左退出画面
@@ -205,7 +238,7 @@ func _draw_house(p, stage: Rect2) -> void:
 		return
 	var shake := knock_shake * 4.0
 	var bx := hx + shake
-	var by := stage.end.y - 96.0
+	var by := stage.end.y - 152.0
 	p.panel(Rect2(bx, by - 150.0, 150.0, 150.0), Color("#6b4a26"), 6)
 	p.draw_polygon(PackedVector2Array([
 		Vector2(bx - 12, by - 150.0), Vector2(bx + 75, by - 205.0), Vector2(bx + 162, by - 150.0)]),
@@ -225,12 +258,14 @@ func _draw_house(p, stage: Rect2) -> void:
 
 func _draw_runner(p, stage: Rect2) -> void:
 	var x := _runner_x()
-	var y := lane_y
+	var y := runner_y
 	var swing := sin(run_t * 16.0) # 步伐
 	var bob := absf(sin(run_t * 16.0)) * 4.0
 	var lean := 0.14 # 前倾
 	if invincible_t > 0.0 and fmod(invincible_t, 0.2) > 0.1:
 		return # 被抓后的无敌闪烁
+	# 脚下的影子：自由上下跑时，它是唯一能告诉你"我站在哪一层"的参照
+	p.draw_circle(Vector2(x, y + 3.0), 17.0, Color(0, 0, 0, 0.22))
 	# 腿
 	p.draw_line(Vector2(x, y - 34.0), Vector2(x + swing * 14.0, y), Color("#26215C"), 7.0)
 	p.draw_line(Vector2(x, y - 34.0), Vector2(x - swing * 14.0, y), Color("#26215C"), 7.0)
@@ -252,7 +287,7 @@ func _draw_collectors(p, stage: Rect2) -> void:
 	for i in range(2):
 		var bob := absf(sin(run_t * 15.0 + i * 1.7)) * 5.0
 		var cx := _runner_x() - gap - i * 34.0 + sin(run_t * 9.0 + i) * 6.0
-		var y := lane_y + 4.0 - bob
+		var y := runner_y + 4.0 - bob
 		var swing := sin(run_t * 15.0 + i * 1.7)
 		p.draw_line(Vector2(cx, y - 30.0), Vector2(cx + swing * 12.0, y), Color("#501313"), 7.0)
 		p.draw_line(Vector2(cx, y - 30.0), Vector2(cx - swing * 12.0, y), Color("#501313"), 7.0)
@@ -263,8 +298,8 @@ func _draw_collectors(p, stage: Rect2) -> void:
 
 func _draw_obstacle(p, stage: Rect2, o: Dictionary) -> void:
 	var x := float(o.x)
-	var y := _lane_y(int(o.lane))
-	if int(o.lane) == 1: # 近道画影子
+	var y := float(o.get("y", stage.end.y - 40.0))
+	if y > stage.get_center().y: # 越靠近观众，影子越实：远近有个交代
 		p.draw_circle(Vector2(x, y + 4.0), 20.0, Color(0, 0, 0, 0.25))
 	if String(o.kind) == "bin":
 		p.panel(Rect2(x - 16.0, y - 40.0, 32.0, 40.0), Color("#888780"), 3)
@@ -277,7 +312,7 @@ func _draw_obstacle(p, stage: Rect2, o: Dictionary) -> void:
 
 func _draw_hud(p, stage: Rect2) -> void:
 	var left := int(ceilf(main.bill_timer))
-	var hint := "↑ ↓ / W S 换道 · 点击上下半屏也行 · 撞障碍被抓一次"
+	var hint := "移动鼠标上下跑（键盘 ↑↓ 也行）· 撞障碍被抓一次"
 	if state == "intro":
 		hint = "敲门声……（点一下跳过）"
 	p.draw_challenge_header("夺门而逃", "撑到时间结束（还剩 " + str(left) + " 秒）",
