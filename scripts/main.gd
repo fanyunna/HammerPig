@@ -1384,6 +1384,8 @@ func settle_card_break(pig: Dictionary, secondary: bool) -> void:
 		gain = roundi(float(gain) * earnings_multiplier * build.income_multiplier())
 		if secondary:
 			gain += build.secondary_reward(self)
+		else:
+			gain += build.direct_break_bonus(self)
 		if combo_count > 1:
 			gain += (combo_count - 1) * combo_bonus_per_hit
 			if earnings_multiplier > 1.0:
