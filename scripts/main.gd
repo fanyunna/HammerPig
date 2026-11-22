@@ -794,6 +794,7 @@ func sync_cursor() -> void:
 	hide = hide and (phase == "playing" or (phase == "challenge" and card_type == "dodge"))
 	hide = hide and not intro_open and not bill_open and bill_detail < 0 and not quick_bill_hover() and not help_open and not (build != null and build.panel_open)
 	hide = hide and not (wheel != null and wheel.is_open()) # 转盘弹窗里得看得见箭头
+	hide = hide and not (day_events != null and day_events.is_open()) # 小游戏弹窗同理：全靠点击，藏箭头就没法玩了
 	if hide == cursor_hidden:
 		return
 	cursor_hidden = hide

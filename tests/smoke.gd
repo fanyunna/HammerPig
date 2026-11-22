@@ -453,6 +453,12 @@ func run() -> void:
     game.bill_open = false
     game._process(0.016)
     check(game.cursor_hidden, "...and the hammer takes over again once you are back at the table")
+    game.day_events._open("pawn") # 小游戏弹窗：同样必须还回系统箭头（全靠鼠标点，藏了就没法玩）
+    game._process(0.016)
+    check(game.day_events.is_open() and not game.cursor_hidden, "...and while a day-event popup is open")
+    game.day_events._close()
+    game._process(0.016)
+    check(game.cursor_hidden, "...and the hammer takes over again after the popup closes")
 
     # --- 大肚猪要四锤；价目表只列见过的种类 ---
     var real: Array = [
