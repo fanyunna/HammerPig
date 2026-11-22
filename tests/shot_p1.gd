@@ -163,4 +163,15 @@ func run() -> void:
 	game.card_offers.append({"id": "glasshunter", "name": "玻璃猎人", "desc": "玻璃猪收益 ×3，其余猪种 -30%", "icon": "◆", "color": "#7fa8b4"})
 	game.card_offers.append({"id": "allin", "name": "孤注一掷", "desc": "体力上限 -40%，敲猪收益 +80%", "icon": "!", "color": "#e0503f"})
 	await snap("tmp_p1_card_new.png")
+
+	# 传承商店：结算画面上打开，带点碎片和已买等级看档位显示
+	print("STEP legacy")
+	game.phase = "finished"
+	game.end_reason = "exhausted"
+	game.meta_shards = 17
+	game.meta_shop = {"watch": 1, "ring": 2}
+	await snap("tmp_p1_finished_legacy.png") # 结算面板：带传承商店入口按钮
+	game.shop_open = true
+	await snap("tmp_p1_legacy_shop.png")
+	game.shop_open = false
 	quit()

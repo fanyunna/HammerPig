@@ -1365,7 +1365,7 @@ func run() -> void:
     game.score = 40
     game.day_events._open("dice")
     check(game.day_events.dice_poor, "a broke player gets the credit game")
-    game.day_events.forced_deck.assign([10, 9, 8, 6]) # 玩家 19，庄家 14→22 爆
+    game.day_events.forced_deck.assign([10, 9, 8, 6, 13]) # 玩家 19，庄家 14 → 补一张 13 → 27 爆（第 5 张是给庄家补牌的，别让牌堆抽空进随机）
     game.day_events.handle_click(Vector2(game.day_events.CONFIRM_RECT.get_center()))
     game.day_events.handle_click(Vector2(game.day_events.STAND_RECT.get_center()))
     check(game.day_events.dice_outcome == "win" and game.score == 40 + 80,
@@ -1408,6 +1408,37 @@ func run() -> void:
     game.reset_game()
     check(not game.day_events.is_open() and game.day_events.served == 0,
         "a new run clears any leftover day-event state")
+    # —— 传承商店：碎片买永久饰品，下一局 reset_game 生效 ——
+    game.settings["crit_base_chance"] = 0.06 # 前面测试段把暴击清零了，这里恢复默认再验证戒指
+    game.settings["crit_max_chance"] = 0.30
+    game.meta_shards = 20
+    game.meta_shop.clear()
+    check(game.legacy_next_cost("watch") == 4, "the shop prices level 1 items correctly")
+    check(game.legacy_buy("watch"), "buying a legacy item spends shards")
+    check(game.meta_shards == 16 and game.legacy_level("watch") == 1, "...and records the level")
+    game.meta_shards = 2
+    check(not game.legacy_buy("grip"), "buying without enough shards is rejected")
+    check(game.legacy_level("grip") == 0 and game.meta_shards == 2, "...leaving shards and levels untouched")
+    game.meta_shop["watch"] = 3
+    check(game.legacy_next_cost("watch") == -1, "maxed items report no price")
+    check(not game.legacy_buy("watch"), "...and cannot be bought again")
+    game.meta_shop.clear()
+    game.meta_shop["watch"] = 2
+    game.meta_shop["grip"] = 1
+    game.meta_shop["ring"] = 1
+    game.meta_shop["abacus"] = 1
+    game.meta_shop["flask"] = 1
+    game.meta_unlocked.clear() # 隔离里程碑解锁，只测商店饰品
+    game.reset_game()
+    check(game.score == 40, "the pocket watch adds starting cash per level")
+    check(int(game.settings.stamina_max) == int(game.base_stamina_max) + 12, "the wrist guard raises stamina cap by 12 per level")
+    check(abs(game.earnings_multiplier - 1.06) < 0.001, "the abacus grants permanent earnings")
+    check(abs(game.stamina_regen_bonus - 0.6) < 0.001, "the flask grants permanent regen")
+    var crit_base: float = float(game.settings.get("crit_base_chance", 0.06))
+    check(abs(game.crit_chance(1) - (crit_base + 0.015)) < 0.001, "the ring grants permanent crit")
+    game.meta_shop.clear()
+    game.reset_game()
+
     print("ALL ", checks, " CHECKS PASSED")
     game.queue_free() # 音效在 Sound 这个 autoload 里，不随场景释放，不用等它放完
     game = null

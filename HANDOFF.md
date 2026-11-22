@@ -657,6 +657,18 @@ qiaozhu-main（11月10日的另一条开发线）在操作层做了手感重构�
 
 ---
 
+### 8.13 第十三轮：传承商店（meta_shards 从里程碑变成可花货币，2026-11-22）
+
+对标原版《Bills Must Be Paid》的"破产 → 传承点 → 永久升级"循环。**里程碑解锁（§ 的 steady_start 等）保留**，商店是玩家自选成长方向的第二层。
+
+1. **商店内容**：`main.gd` 顶部 `LEGACY_ITEMS` 常量（5 件饰品 × 3 级，价格 4/8/12 或 5/9/14 碎片）：旧怀表（开局资金 +¥20/级）、皮护腕（体力上限 +12/级）、幸运戒指（暴击率 +1.5%/级）、商人算盘（收益 +6%/级）、咖啡壶（体力回复 +0.6/s/级）。购买/等级存 `meta_shop: Dictionary`，随 `save_meta()` 持久化到 `user://hammerpig_meta.cfg`（新键 `meta/shop`）。
+2. **效果落地全在 `reset_game`**：开局资金、体力上限、`earnings_multiplier` 初值、`stamina_regen_bonus` 初值各加一行；戒指改 `crit_chance()` 的 base（仍受 `crit_max_chance` 封顶）。与对局内卡牌/转盘乘区独立叠乘。
+3. **入口**：序幕按钮（`INTRO_SHOP_RECT`）+ 结算面板按钮（`LEGACY_SHOP_RECT`，在「再来一轮」左边）+ 键盘 B/Esc 关闭。⚠️ **商店按钮必须画在 `draw_finished`/`draw_bankrupt` 里**——画在 `_draw` 主流程会被后画的结算面板盖掉（本次踩过）。商店开着时 `_process` 暂停链与 `_unhandled_input` 顶部优先吞输入。
+4. **存档守卫**：`save_meta()` 也加了 headless 守卫（原来只有 load 有）——否则 headless 测试跑 `legacy_buy` 会把假进度写进真实存档。
+5. **测试**：+12 断言 → **278**，连跑 3 次全绿。⚠️ smoke 前段会把 `crit_base_chance/crit_max_chance` 清零、`base_stamina_max` 改成 260 且**不恢复**——商店测试段要自己恢复暴击配置、 stamina 断言用相对值（`base + 12`）别写死 112。⚠️ **顺手根治一条随机翻车**：赌桌赊账局的 `forced_deck` 只给 4 张，庄家补牌时牌堆已空走随机兜底——注入牌要**把庄家补牌那张也算进去**（现在是 5 张）。截图：`tmp_p1_finished_legacy.png` / `tmp_p1_legacy_shop.png`。
+
+---
+
 ## 9. 3D 视口实现（小猪、桌面与锤子）
 
 > 当前版本已将存钱罐、赌场桌面和第一人称锤手接入独立 3D 视口；卡片和账单等界面仍由 2D 自绘。小猪的程序化网格实现细节记录在本节，桌面与锤手当前结构见 §3.5。
@@ -747,7 +759,7 @@ HammerPig（Node2D，main.gd）
 
 ## 10. 未来规划（尚未实现，按优先级排序）
 
-1. **破产 → 传承点 / 永久升级**（最贴近原作灵魂）：破产结算时给「传承点」，买戒指/手镯等永久属性，下局更强。
+1. ~~**破产 → 传承点 / 永久升级**~~：**✅ 已实现**（见 §8.13）：碎片在传承商店买永久饰品，下局生效。
 2. ~~**耐力系统**~~：**✅ 已实现**（见 §8.3）：每挥一锤扣 `stamina_cost`，见底结束本轮。剩余方向是「耐力随时间恢复」和「耐力上限 / 消耗做成升级卡」。
 3. **多种存钱罐**：会逃跑的、不动的、藏大量黑钱的（对应多种猪）。
 4. **多种大锤**：暴击概率 / 攻击范围 / 攻速差异。
@@ -764,5 +776,5 @@ HammerPig（Node2D，main.gd）
 - **小猪 3D 化**：按 §9 的接入指南做，只换 `draw_pig` / `draw_pig_shaken` 的渲染方式，不许动逻辑层。
 - **改/加小游戏**：严格按第 5.3 节的扩展配方做，每加一个都要同步更新 `tests/smoke.gd`。
 - **改声音**：全部配方在 `scripts/soundfx.gd` 的 `_build()`，改完跑 `tests/export_sfx.gd` 导出 wav 用耳朵校对；`Sound.play(name, pitch, gain)` 是唯一入口，`crack` 例外走素材 `hit.wav`。
-- **跑测试**：用第 2 节的 headless 命令；最近一次结果为 `ALL 132 CHECKS PASSED`。
+- **跑测试**：用第 2 节的 headless 命令；最近一次结果为 `ALL 278 CHECKS PASSED`。
 - **不要**在对话里依赖任何「Claude 记忆」——本项目的全部上下文都在这份 HANDOFF.md 和代码注释里。

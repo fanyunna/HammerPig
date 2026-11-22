@@ -17,6 +17,10 @@ const DETAIL_CLOSE := Rect2(656, 560, 160, 54) # 大账单上的「放回」
 const CARD_RECT := Rect2(510, 290, 260, 250)
 const UPGRADE_CARD_RECTS := [Rect2(150, 270, 290, 300), Rect2(495, 270, 290, 300), Rect2(840, 270, 290, 300)]
 const CONTINUE_RECT := Rect2(535, 563, 210, 52)
+const LEGACY_SHOP_RECT := Rect2(400, 563, 120, 52) # 结算面板上的「传承商店」按钮（在再来一轮左边）
+const INTRO_SHOP_RECT := Rect2(116, 586, 234, 44) # 序幕上的入口（在「任意键开始」下方）
+const LEGACY_PANEL := Rect2(240, 80, 800, 584) # 传承商店全屏面板
+const LEGACY_CLOSE_RECT := Rect2(585, 600, 110, 40) # 商店关闭按钮（鼠标玩家的出口；键盘 B/Esc 也行）
 const INTRO_RECT := Rect2(112, 476, 234, 52) # 开场序幕的「敲开第一只」按钮
 const RESET_RECT := Rect2(1090, 36, 140, 46)
 const BOUNTY_RECT := Rect2(172, 146, 158, 84) # 悬赏板：钉在余额和体力条之间的木牌（猪活动区之外，狂敲不会误触）
@@ -161,6 +165,17 @@ var meta_shards := 0
 var meta_runs := 0
 var meta_unlocked: Array[String] = []
 var meta_rewarded := false
+## 传承商店：碎片是可花货币（原版 Bills Must Be Paid 的传承点思路）。
+## 里程碑解锁（steady_start 等）保留自动发放，商店是在其之上“玩家自己选成长方向”的一层。
+const LEGACY_ITEMS := [
+	{"id": "watch", "name": "旧怀表", "desc": "开局资金 +¥20/级", "max": 3, "costs": [4, 8, 12]},
+	{"id": "grip", "name": "皮护腕", "desc": "体力上限 +12/级", "max": 3, "costs": [4, 8, 12]},
+	{"id": "ring", "name": "幸运戒指", "desc": "暴击率 +1.5%/级", "max": 3, "costs": [5, 9, 14]},
+	{"id": "abacus", "name": "商人算盘", "desc": "收益加成 +6%/级", "max": 3, "costs": [5, 9, 14]},
+	{"id": "flask", "name": "咖啡壶", "desc": "体力回复 +0.6/秒/级", "max": 3, "costs": [4, 8, 12]},
+]
+var meta_shop: Dictionary = {} # 饰品 id → 已买等级
+var shop_open := false # 传承商店面板开着时：整局暂停、输入只认商店
 var base_stamina_max := 100.0
 var stamina := 100.0
 var stamina_flash := 0.0
@@ -415,13 +430,20 @@ func load_meta() -> void:
 	var raw: Variant = cfg.get_value("meta", "unlocked", [])
 	if raw is Array:
 		meta_unlocked.assign(raw)
+	var shop: Variant = cfg.get_value("meta", "shop", {})
+	if shop is Dictionary:
+		meta_shop = shop
 
 
 func save_meta() -> void:
+	# load 有守卫，save 也要：headless 测试跑 legacy_buy 时不能把假进度写进真实存档
+	if DisplayServer.get_name().contains("headless"):
+		return
 	var cfg := ConfigFile.new()
 	cfg.set_value("meta", "shards", meta_shards)
 	cfg.set_value("meta", "runs", meta_runs)
 	cfg.set_value("meta", "unlocked", meta_unlocked)
+	cfg.set_value("meta", "shop", meta_shop)
 	cfg.save(META_PATH)
 
 
@@ -442,6 +464,30 @@ func award_meta_progress() -> void:
 
 func meta_starting_cash() -> int:
 	return 10 if meta_unlocked.has("steady_start") else 0
+
+
+## —— 传承商店：碎片买永久饰品，下一局开局生效 ——
+func legacy_level(id: String) -> int:
+	return int(meta_shop.get(id, 0))
+
+
+func legacy_next_cost(id: String) -> int:
+	for item in LEGACY_ITEMS:
+		if String(item.id) == id:
+			var lv := legacy_level(id)
+			return -1 if lv >= int(item.max) else int(item.costs[lv])
+	return -1
+
+
+func legacy_buy(id: String) -> bool:
+	var cost := legacy_next_cost(id)
+	if cost < 0 or meta_shards < cost:
+		return false # 满级或碎片不够：钱和等级都不动
+	meta_shards -= cost
+	meta_shop[id] = legacy_level(id) + 1
+	save_meta()
+	Sound.play("cash")
+	return true
 
 
 func meta_unlock_summary() -> String:
@@ -945,7 +991,7 @@ func reset_game() -> void:
 	game_day = 1
 	meta_rewarded = false
 	roll_bills() # 里面会 bills_fx.reset() 并按新账单重建效果来源
-	score = meta_starting_cash()
+	score = meta_starting_cash() + legacy_level("watch") * 20 # 旧怀表：开局资金
 	last_observed_score = score
 	# 代价型卡的加成必须在算体力上限之前清掉：否则"孤注一掷"会把上限一路压低到下一局。
 	stamina_max_multiplier = 1.0
@@ -954,7 +1000,7 @@ func reset_game() -> void:
 	light_hammer_off = false
 	heavy_hammer_multiplier = 1.0
 	pay_greed_per_pay = 0.0
-	settings["stamina_max"] = maxi(20, int(round((base_stamina_max + (10.0 if meta_unlocked.has("deep_pockets") else 0.0)) * stamina_max_multiplier)))
+	settings["stamina_max"] = maxi(20, int(round((base_stamina_max + (10.0 if meta_unlocked.has("deep_pockets") else 0.0) + 12 * legacy_level("grip")) * stamina_max_multiplier)))
 	# 第一张卡要来得晚一点（card_first_at）：开局这段必须是"砸 → 爆钱 → 砸"的连续反馈，
 	# 把对外服务的教学/抉择留到玩家已经上手之后。之后每张按 card_interval 间隔。
 	next_card = int(settings.get("card_first_at", settings.get("card_interval", 50)))
@@ -973,11 +1019,11 @@ func reset_game() -> void:
 	challenge_label = ""
 	hammer_damage_bonus = 0
 	stamina_cost_reduction = 0.0
-	earnings_multiplier = 1.0
+	earnings_multiplier = 1.0 + 0.06 * legacy_level("abacus") # 商人算盘：永久收益加成，与对局内卡牌乘区叠乘
 	combo_bonus_per_hit = 0
 	hammer_reach_multiplier = 1.0
 	hammer_cooldown_reduction = 0.0
-	stamina_regen_bonus = 0.0
+	stamina_regen_bonus = 0.6 * legacy_level("flask") # 咖啡壶：永久回复，与对局内加成叠加
 	pig_size_multiplier = 1.0
 	pig_population_doubled = false
 	if meta_unlocked.has("combo_school"):
@@ -1063,7 +1109,7 @@ func _process(delta: float) -> void:
 	if wheel != null and wheel.is_open(): # 转盘弹窗：整局暂停（猪停刷、不能砸）；转盘自己的 _process 继续转
 		queue_redraw()
 		return
-	if bill_open or bill_detail >= 0 or quick_bill_hover() or help_open or build.panel_open or day_events.is_open(): # 翻账单/看构筑/小游戏弹窗：整局都停下来
+	if bill_open or bill_detail >= 0 or quick_bill_hover() or help_open or build.panel_open or day_events.is_open() or shop_open: # 翻账单/看构筑/小游戏弹窗/传承商店：整局都停下来
 		queue_redraw()
 		return
 	elapsed += delta
@@ -1204,10 +1250,23 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if intro_open: # 序幕期间吞掉一切输入：点按钮或按任意键都只是「开始」
+	if shop_open: # 传承商店：输入只认商店。B / Esc 关闭，点击交给购买/关闭按钮
+		if event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_B or event.keycode == KEY_ESCAPE):
+			shop_open = false
+			sync_cursor()
+			queue_redraw()
+		elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			legacy_shop_click(get_global_mouse_position())
+		return
+	if intro_open: # 序幕期间吞掉一切输入：点按钮或按任意键都只是「开始」（商店按钮除外）
 		if event is InputEventMouseButton:
 			if event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-				intro_open = false
+				if INTRO_SHOP_RECT.has_point(get_global_mouse_position()):
+					shop_open = true
+					Sound.play("click")
+					queue_redraw()
+				else:
+					intro_open = false
 		elif event is InputEventKey and event.pressed and not event.echo:
 			intro_open = false
 		return
@@ -1371,7 +1430,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			if card_type == "collect":
 				click_coin(point)
 		elif phase == "finished" or phase == "bankrupt":
-			if CONTINUE_RECT.has_point(point):
+			if LEGACY_SHOP_RECT.has_point(point): # 结算后正好清点家底：顺手逛逛传承商店
+				Sound.play("click")
+				shop_open = true
+				queue_redraw()
+			elif CONTINUE_RECT.has_point(point):
 				Sound.play("click")
 				reset_game()
 		else: # playing：桌边那枚硬币的按钮在前面已经处理过，这里就只剩挥锤了
@@ -1813,7 +1876,7 @@ func strike_release(point: Vector2, power: float) -> void:
 
 ## 暴击：连击越高越容易出，封顶 30%。只放大正收益（调用处保证）。
 func crit_chance(combo: int) -> float:
-	var base := float(settings.get("crit_base_chance", 0.06))
+	var base := float(settings.get("crit_base_chance", 0.06)) + 0.015 * legacy_level("ring") # 幸运戒指：永久暴击
 	var per := float(settings.get("crit_per_combo", 0.015))
 	var cap := float(settings.get("crit_max_chance", 0.30))
 	return minf(cap, maxf(0.0, base + float(maxi(0, combo - 1)) * per))
@@ -2626,6 +2689,8 @@ func draw_intro() -> void:
 	text_at(title, Vector2(112, 350), 82, Color("#ffe2a1"))
 	text_at(String(story.get("subtitle", "最后缴费期限：今天")), Vector2(116, 403), 26, Color("#dfb889"))
 	button(INTRO_RECT, String(story.get("intro_button", "敲开第一只")))
+	button(INTRO_SHOP_RECT, "传承商店")
+	text_at("碎片 " + str(meta_shards), Vector2(360, 598), 16, Color("#ffe092"))
 	text_at("任意键开始", Vector2(116, 560), 15, Color("#c9a789"))
 
 	# A bill, a pig and a hammer tell the story without another block of text.
@@ -2681,6 +2746,9 @@ func _draw() -> void:
 	if double_timer > 0.0:
 		text_at("双倍中 ×2 剩 " + ("%.0f" % double_timer) + "s", Vector2(975, 103), 20, Color("#a4d007"))
 	button(RESET_RECT, "重新开始")
+	if not intro_open: # 商店按钮：结算面板（finished/bankrupt）上可见
+		if phase == "finished" or phase == "bankrupt":
+			button(LEGACY_SHOP_RECT, "传承商店")
 	panel(Rect2(52, 137, 1176, 98), Color("#37251a"))
 	text_at("体力 " + str(int(stamina)) + " / " + str(int(stamina_max)), Vector2(350, 174), 20, bar_color)
 	text_at("游戏日期 " + format_game_date(game_day), Vector2(760, 196), 17, Color("#efbc72"))
@@ -2784,6 +2852,8 @@ func _draw() -> void:
 		text_center("游戏已暂停 · 点击任意位置或按 H / Esc 返回", 640, 575, 16, Color("#efbc72"))
 	build.draw_status(self) # 卡片2.0：C 面板提示与构筑清单，盖在最上层
 	day_events.draw(self) # 天数小游戏弹窗（当铺/赌桌/电话）：盖在一切之上，输入已被转发
+	if shop_open:
+		draw_legacy_shop() # 传承商店：最顶层。商店只在序幕/结算画面打开，不会和小游戏弹窗同时存在
 
 func draw_pig(pig: Dictionary, index: int) -> void:
 	if bool(pig.get("wheel_gold", false)):
@@ -3312,7 +3382,48 @@ func draw_finished() -> void:
 	text_center("余额 ¥" + str(score) + "    敲碎 " + str(broken) + " 只", 640, 452, 26, Color("#efbc72"))
 	text_center("已还 " + str(paid_count) + " 张 · 还剩 " + str(bills.size()) + " 张（¥" + str(bills_total()) + "）", 640, 498, 20, Color("#c9b08a"))
 	text_center("永久成长：" + meta_unlock_summary() + "　·　碎片 " + str(meta_shards), 640, 536, 15, Color("#efbc72"))
+	button(LEGACY_SHOP_RECT, "传承商店")
 	button(CONTINUE_RECT, "再来一轮")
+
+
+## —— 传承商店面板：碎片在这里换成永久饰品，下一局 reset_game 时生效 ——
+func _legacy_buy_rect(i: int) -> Rect2:
+	return Rect2(848, 200 + i * 78 + 12, 150, 42)
+
+
+func draw_legacy_shop() -> void:
+	panel(LEGACY_PANEL, Color("#24160f"), 22)
+	draw_rect(LEGACY_PANEL.grow(-4), Color("#be874d"), false, 2.0)
+	text_center("传承商店 · 碎片 " + str(meta_shards), 640, 128, 30, Color("#ffe092"))
+	text_center("破产不是终点 —— 每一轮攒下的碎片，在这里换成下一轮的本钱", 640, 164, 15, Color("#c9a789"))
+	for i in range(LEGACY_ITEMS.size()):
+		var item: Dictionary = LEGACY_ITEMS[i]
+		var y := 200 + i * 78
+		panel(Rect2(264, y, 752, 66), Color("#2d1c12"), 10)
+		var lv := legacy_level(String(item.id))
+		text_at(String(item.name), Vector2(292, y + 14), 20, Color("#ffe092"))
+		text_at(String("●").repeat(lv) + String("○").repeat(int(item.max) - lv), Vector2(392, y + 17), 15, Color("#e7a655"))
+		text_at(String(item.desc), Vector2(292, y + 40), 15, Color("#b59a7c"))
+		var cost := legacy_next_cost(String(item.id))
+		if cost < 0:
+			button(_legacy_buy_rect(i), "已满级", false)
+		else:
+			button(_legacy_buy_rect(i), "买入 ¥" + str(cost), meta_shards >= cost)
+	button(LEGACY_CLOSE_RECT, "关闭")
+	text_center("按 B 或 Esc 关闭", 640, 652, 13, Color("#8a6a4a"))
+
+
+func legacy_shop_click(p: Vector2) -> void:
+	for i in range(LEGACY_ITEMS.size()):
+		if _legacy_buy_rect(i).has_point(p):
+			legacy_buy(String(LEGACY_ITEMS[i].id))
+			queue_redraw()
+			return
+	if LEGACY_CLOSE_RECT.has_point(p):
+		shop_open = false
+		sync_cursor()
+	queue_redraw()
+
 
 func draw_bankrupt() -> void:
 	panel(Rect2(385, 270, 510, 375), Color("#3a2424"), 25)
@@ -3321,4 +3432,5 @@ func draw_bankrupt() -> void:
 	text_center("余额 ¥" + str(score) + "    敲碎 " + str(broken) + " 只", 640, 452, 26, Color("#efbc72"))
 	text_center("已还 " + str(paid_count) + " 张 · 还剩 " + str(bills.size()) + " 张（¥" + str(bills_total()) + "）", 640, 498, 20, Color("#c9b08a"))
 	text_center("永久成长：" + meta_unlock_summary() + "　·　碎片 " + str(meta_shards), 640, 536, 15, Color("#efbc72"))
+	button(LEGACY_SHOP_RECT, "传承商店")
 	button(CONTINUE_RECT, "再来一轮")
