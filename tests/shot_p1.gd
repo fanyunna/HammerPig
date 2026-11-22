@@ -96,7 +96,7 @@ func run() -> void:
 	game.escape.forced_obstacles.assign([{"lane": 1, "kind": "bin"}, {"lane": 0, "kind": "barrier"},
 		{"lane": 1, "kind": "bin"}, {"lane": 1, "kind": "barrier"}, {"lane": 0, "kind": "bin"},
 		{"lane": 1, "kind": "bin"}, {"lane": 0, "kind": "barrier"}, {"lane": 1, "kind": "bin"}])
-	for i in range(14): # 跳过演出（2.2s）再跑 ~2.8 秒：障碍铺开、催债人吊在身后
+	for i in range(24): # 跳过演出（2.2s）再跑 ~2.6 秒：障碍铺开、催债人吊在身后
 		game.escape.update(0.2)
 	await snap("tmp_p1_dodge.png")
 

@@ -12,7 +12,8 @@ const OBSTACLE_W := 34.0 # 障碍碰撞半宽（与跑步速度一起决定反�
 const KNOCK_TIME := 0.5
 const BURST_TIME := 1.0
 
-var main # main.gd 主脚本：只读它的常量/计时器，结算回调 main.finish_challenge
+var main # main.gd 主脚本：只读它的计时器，结算回调 main.finish_challenge
+var stage_rect := Rect2(56, 300, 1168, 372) # 舞台像素区：由 main._ready 把 CHALLENGE_STAGE 注进来（跨脚本读常量不稳）
 var active := false # 躲债关是否进行中（state != idle）
 var state := "" # intro / run / result
 var intro_t := 0.0
@@ -58,7 +59,7 @@ func start() -> void:
 	Sound.play("stamp", 0.8, 0.5) # 敲门声
 
 func _lane_y(l: int) -> float:
-	var stage: Rect2 = main.CHALLENGE_STAGE
+	var stage: Rect2 = stage_rect
 	return stage.position.y + stage.size.y * (0.58 if l == 0 else 0.88)
 
 func _interval() -> float:
@@ -108,7 +109,7 @@ func update(delta: float) -> void:
 						if main.dodge_lives <= 0:
 							_finish(false)
 						continue
-				if float(o.x) < main.CHALLENGE_STAGE.position.x - 60.0:
+				if float(o.x) < stage_rect.position.x - 60.0:
 					obstacles.remove_at(i)
 			if state == "run" and main.bill_timer <= 0.0:
 				_finish(true) # 撑过倒计时：逃脱成功
@@ -123,18 +124,18 @@ func _finish(success: bool) -> void:
 	main.finish_challenge(success)
 
 func _runner_x() -> float:
-	return main.CHALLENGE_STAGE.position.x + RUNNER_X_OFFSET
+	return stage_rect.position.x + RUNNER_X_OFFSET
 
 func _spawn_obstacle() -> void:
 	if not forced_obstacles.is_empty():
 		var f: Dictionary = forced_obstacles.pop_front()
 		obstacles.append({"lane": int(f.get("lane", 1)), "kind": String(f.get("kind", "bin")),
-			"x": main.CHALLENGE_STAGE.end.x + 40.0})
+			"x": stage_rect.end.x + 40.0})
 		return
 	var lane_i := randi() % 2
 	var kinds := ["bin", "barrier", "bin"]
 	obstacles.append({"lane": lane_i, "kind": kinds[randi() % kinds.size()],
-		"x": main.CHALLENGE_STAGE.end.x + 40.0})
+		"x": stage_rect.end.x + 40.0})
 
 ## ---------- 输入：main._unhandled_input 的 challenge 分支转发 ----------
 func handle_click(point: Vector2) -> void:
@@ -143,7 +144,7 @@ func handle_click(point: Vector2) -> void:
 		return
 	if state != "run":
 		return
-	var stage: Rect2 = main.CHALLENGE_STAGE
+	var stage: Rect2 = stage_rect
 	lane = 0 if point.y < stage.get_center().y else 1
 
 func handle_key(keycode: int) -> void:
@@ -159,7 +160,7 @@ func handle_key(keycode: int) -> void:
 
 ## ---------- 绘制：由 main._draw 在躲债关调用，全部画在主画布上 ----------
 func draw(p) -> void:
-	var stage: Rect2 = main.CHALLENGE_STAGE
+	var stage: Rect2 = stage_rect
 	_draw_backdrop(p, stage)
 	_draw_house(p, stage)
 	for o in obstacles:

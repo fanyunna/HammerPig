@@ -208,10 +208,12 @@ func _ready() -> void:
 	bills_fx = BillManagerScript.new()
 	build = CardBuildScript.new() # 卡片2.0：RefCounted，不进场景树，只吃 main 的公开状态
 	day_events = DayEventsScript.new()
-	escape = EscapeScript.new()
-	escape.setup(self)
 	add_child(day_events)
 	day_events.setup(self)
+	escape = EscapeScript.new()
+	add_child(escape) # 和 day_events 一样进场景树：生命周期跟着 main，不靠裸引用
+	escape.setup(self)
+	escape.stage_rect = CHALLENGE_STAGE # 舞台区域由这里注入：跨脚本读常量不做依赖
 	load_meta()
 	bills_fx.setup(bill_data)
 	bills_fx.collection_triggered.connect(_on_collection_triggered)
@@ -1449,11 +1451,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			elif CONTINUE_RECT.has_point(point) or CARD_RECT.has_point(point):
 				Sound.play("click")
 				apply_card()
-	elif phase == "challenge":
-		if card_type == "collect":
-			click_coin(point)
-		else:
-			escape.handle_click(point) # 逃跑场面：点上下半屏换道 / 跳过演出
+		elif phase == "challenge":
+			if card_type == "collect":
+				click_coin(point)
+			else:
+				escape.handle_click(point) # 逃跑场面：点上下半屏换道 / 跳过演出
 		elif phase == "finished" or phase == "bankrupt":
 			if LEGACY_SHOP_RECT.has_point(point): # 结算后正好清点家底：顺手逛逛传承商店
 				Sound.play("click")
