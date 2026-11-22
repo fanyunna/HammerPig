@@ -2755,6 +2755,10 @@ func _draw() -> void:
 	draw_desk() # 桌面先铺，后面的 HUD / 猪 / 卡片都在它上面
 	if intro_open:
 		draw_intro()
+		if shop_open:
+			# 传承商店从序幕打开：必须盖在序幕上面画出来。否则输入走商店分支、
+			# 画面停在序幕 —— 玩家点哪都没反应，像"进不了游戏"（十三轮踩坑）。
+			draw_legacy_shop()
 		return
 	text_at(String(story.get("title", "敲猪还债")), Vector2(54, 71), 36)
 	var stamina_max := float(settings.get("stamina_max", 100))

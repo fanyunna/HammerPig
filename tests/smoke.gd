@@ -1462,6 +1462,15 @@ func run() -> void:
     game.meta_shop.clear()
     game.reset_game()
 
+    # —— 序幕 + 商店同开：十三轮踩坑——商店盖不住序幕时输入走商店分支、画面停在序幕，玩家像"进不了游戏" ——
+    game.intro_open = true
+    game.shop_open = true
+    key_press(KEY_B)
+    check(not game.shop_open and game.intro_open, "B closes the intro shop without leaving the intro")
+    key_press(KEY_SPACE)
+    check(not game.intro_open, "the intro still responds to keys once the shop is closed")
+    game.intro_open = false
+
     print("ALL ", checks, " CHECKS PASSED")
     game.queue_free() # 音效在 Sound 这个 autoload 里，不随场景释放，不用等它放完
     game = null
