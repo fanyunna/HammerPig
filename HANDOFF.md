@@ -355,8 +355,9 @@ desk3d / use_desk_3d   # 3D 赌桌 SubViewport / 是否启用 3D 桌面（可单
 | `start_challenge()` | 进入 challenge，按类型初始化状态 |
 | `finish_challenge(success)` | 结算小游戏：成功 +reward / 失败扣钱（≤0→bankrupt） |
 | `update_collect(delta)` | collect 小游戏每帧：刷金币、移动、判定胜负 |
-| `update_dodge(delta)` | dodge 小游戏每帧：刷催债、追踪鼠标、碰撞扣命、判定胜负 |
-| `spawn_coin()` / `spawn_dodger()` | 生成金币 / 催债图标 |
+| `update_dodge(delta)` | **已退役**：旧圆圈躲弹幕被 `escape.gd` 替换（§8.15），躲债关每帧走 `escape.update(delta)` |
+| `escape.update/draw/handle_click/handle_key` | 逃跑场面（scripts/escape.gd）：开场演出 + 双车道跑酷，结算回调 `finish_challenge` |
+| `spawn_coin()` | 生成金币（假币概率见 `coin_fake_chance`）；旧 `spawn_dodger` 已随圆圈躲弹幕退役 |
 | `click_coin(point)` | collect 小游戏点击金币 |
 | `random_pig_velocity()` | 生成小猪游走速度：随机方向 × `pig_speed` × 0.7~1.3 |
 | `end_round_exhausted()` | 体力见底结算：`end_reason = "exhausted"`、`phase = "finished"`（余额保留，不算破产） |
@@ -677,6 +678,21 @@ qiaozhu-main（11月10日的另一条开发线）在操作层做了手感重构�
 2. **打击顿帧（hit-stop）**：新增 `hit_stop_hit: 0.06` / `hit_stop_crit: 0.15`（秒）。命中瞬间全场定格几帧（冷却/猪/计时/账单全停），暴击顿得更长——打击感的零成本放大器。触发点在 strike 的命中分支；普通命中 0.06、暴击 0.15（`maxf` 取大，可叠）。⚠️ `_process` 里的顿帧判定放在弹窗暂停链**之后**、`elapsed` 累加之前；大步长帧（卡顿补帧/测试跳帧）一次耗完就照常走，不吞帧——否则 smoke 里 `_process(respawn+0.1)` 这种断言会翻车。
 3. **结算高光**：`draw_finished`/`draw_bankrupt` 各加一行金色"本局高光"：**最高连击 ×N · 最大单笔 +¥N · 赌桌 N胜N负**。数据源：`combo_max`（原有）、`best_gain`（敲猪/转盘金猪 +200/悬赏赏金三处入账时取 max）、`gamble_wins/gamble_losses`（day_events `_dice_settle` 的 win/lose 分支计数，push 不记）。面板排版：已还行 498→492，高光 524，永久成长 550。
 4. **测试**：+7 断言（命中回体、顿帧触发、高光三项记录、赌桌胜负计数）→ **285**。⚠️ 顿帧断言要放在一次"新鲜的命中"之后（大步长 `_process` 会把剩余顿帧耗完）；赌桌战绩用 `day_events._dice_settle()` 直接摆牌触发。**待验证**：本轮 Godot 被沙箱拦截没法跑 headless，需人工跑 `ALL 285 CHECKS PASSED` 确认。
+
+---
+
+### 8.15 第十五轮：逃跑场面（躲催债换成"夺门而出 + 双车道跑酷"，2026-11-22）
+
+用户点名参考《神庙逃亡》的"跑与躲"，不想再做面板式小游戏，想要**有动画的剧情场面**：主人公从门里逃出来、躲催债。三决策：**全部替换旧圆圈躲弹幕**、**双车道换位**、**带开场演出**。
+
+1. **新模块 `scripts/escape.gd`**（接线和 day_events 同款低侵入：`setup(host)` / `update(delta)` / `draw(p)` / `handle_click` / `handle_key` / `reset_run()`，全部画在 main 画布上）：
+   - **开场演出 2.2 秒**：敲门（stamp 音）→ 门被砸开（door_open 0→1，门板"假 3D"收拢 + 门内黑洞）→ 主人公冲出。**点一下 / 空格可跳过**。
+   - **跑酷**：主人公固定 x、`↑↓/W/S` 或点击舞台上下半屏在两车道间换道（lerp 插值出滑步感）；障碍（垃圾桶/路障）从右缘以 `escape_obstacle_speed` 左移，撞上扣一颗心（`dodge_lives` 复用）并触发 0.9s 无敌闪烁；催债人吊在身后当压力可视化——**命越少贴得越近**。撑过 `bill_timer` = `finish_challenge(true)`，满 3 次抓 = `finish_challenge(false)`。
+   - **零随机复现**：`forced_obstacles` 注入 [{lane, kind}] 按序消费（测试用）。
+2. **main 接线 8 处**：preload/var/_ready 创建、`reset_game` 里 `escape.reset_run()`、`start_challenge` dodge 分支 `escape.start()`、`_process` challenge 分支 `escape.update(delta)`（替代已删除的 `update_dodge`/`spawn_dodger`）、`_draw` → `escape.draw(self)`（`draw_dodge`/`draw_dodger`/`draw_player` 已删）、challenge 点击分支转发 `escape.handle_click`、按键处理**最前部**拦截 ↑↓/W/S/空格回车（先于 B/账本）、3D 舞台只在 collect 时激活（逃跑场面是横版 2D 自绘，不走 challenge3d）。
+3. **数值**（balance.json）：`escape_obstacle_interval: 1.1`、`escape_obstacle_speed: 260`、`escape_invincible: 0.9`。
+4. **测试**：旧 dodge 断言改写为逃跑场面断言（演出→跑酷交接、换道、必撞扣命、换道躲开、撑过计时结算）——⚠️ 注入障碍前要把 `escape.spawn_t` 清零强迫本帧生成，否则 `obstacles[0]` 越界；结算用 `game._process(0.1)` 走主循环（bill_timer 由 main 递减）。shot_p1.gd 的 dodge 态改为注入 8 个障碍跑 14 帧。
+5. **状态**：Godot 被沙箱拦截没法本地跑测试，需人工验证 `ALL … CHECKS PASSED` + 截图 `tmp_p1_dodge.png`。
 
 ---
 

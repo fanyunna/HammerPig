@@ -86,22 +86,18 @@ func run() -> void:
 		game.challenge3d._process(0.04) # 快进物理，让金币落到台面上
 	await snap("tmp_p1_challenge.png")
 
-	# 躲催债：一圈礼帽催收员围过来，光标环因危险变红
+	# 躲催债：逃跑场面（开场演出 + 双车道跑酷）
 	print("STEP dodge")
 	game.card_type = "dodge"
 	game.bill_amount = 560
 	game.start_challenge()
 	game.challenge_label = "房租 ¥560"
 	game.bill_timer = 26.0
-	game.dodge_lives = 3
-	game.dodgers.clear()
-	var dodger_spots := [Vector2(200, 400), Vector2(400, 600), Vector2(640, 660), Vector2(980, 430), Vector2(1120, 620), Vector2(520, 350)]
-	for i in range(dodger_spots.size()):
-		game.dodger_uid += 1
-		game.dodgers.append({"position": dodger_spots[i], "life": 9.0, "seed": float(i), "dcid": game.dodger_uid})
-	Input.warp_mouse(Vector2(760, 470))
-	for i in range(25):
-		game.challenge3d._process(0.04)
+	game.escape.forced_obstacles.assign([{"lane": 1, "kind": "bin"}, {"lane": 0, "kind": "barrier"},
+		{"lane": 1, "kind": "bin"}, {"lane": 1, "kind": "barrier"}, {"lane": 0, "kind": "bin"},
+		{"lane": 1, "kind": "bin"}, {"lane": 0, "kind": "barrier"}, {"lane": 1, "kind": "bin"}])
+	for i in range(14): # 跳过演出（2.2s）再跑 ~2.8 秒：障碍铺开、催债人吊在身后
+		game.escape.update(0.2)
 	await snap("tmp_p1_dodge.png")
 
 	# 2D 回退（challenge_3d:false / 老机器）：确认没有 3D 时版面也立得住

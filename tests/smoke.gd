@@ -245,20 +245,36 @@ func run() -> void:
     check(game.score == 2 * int(game.settings.points_per_pig), "double card doubles pig earnings")
     key_press(KEY_R)
 
-    # dodge card
+    # dodge card -> 逃跑场面（夺门而出 + 双车道跑酷，十五轮）
     game.card_type = "dodge"
     game.phase = "card"
     game.apply_card()
     check(game.phase == "challenge" and game.dodge_lives == int(game.settings.dodge_lives), "dodge card enters challenge with lives")
-    game.hammer_position = Vector2(400, 400)
-    game.invincible_timer = 0.0
-    game.dodgers.clear()
-    game.dodgers.append({"position": Vector2(400, 400), "life": 5.0, "seed": 0.0})
-    game.update_dodge(0.0)
-    check(game.dodge_lives == int(game.settings.dodge_lives) - 1, "dodger touching player costs a life")
-    game.bill_timer = 0.0
-    game.update_dodge(0.0)
-    check(game.phase == "playing" and game.score == int(game.settings.bill_reward), "surviving dodge clears bill and rewards")
+    check(game.escape.is_open() and game.escape.state == "intro", "the escape opens with the door cinematic")
+    for i in range(6):
+        game.escape.update(0.5) # 3 秒：演出 2.2 秒走完，最后一帧进跑酷
+    check(game.escape.state == "run", "the cinematic hands over to the run")
+    game.escape.handle_key(KEY_UP)
+    check(game.escape.lane == 0, "W/S/arrow keys switch lanes")
+    game.escape.handle_key(KEY_DOWN)
+    check(game.escape.lane == 1, "...both directions")
+    var lives_before_hit: int = game.dodge_lives
+    game.escape.forced_obstacles.assign([{"lane": 1, "kind": "bin"}]) # 主角默认在下道：必撞
+    game.escape.spawn_t = 0.0 # 强迫本帧立即生成，免得长跑等待
+    game.escape.update(0.2) # 障碍从右缘生成并左移
+    game.escape.obstacles[0].x = game.escape._runner_x() # 直接挪到脚下，省去长跑等待
+    game.escape.update(1.0 / 60.0)
+    check(game.dodge_lives == lives_before_hit - 1, "hitting an obstacle gets you caught once")
+    game.escape.forced_obstacles.assign([{"lane": 1, "kind": "bin"}])
+    game.escape.lane = 0 # 换到上道：下道的障碍碰不到你
+    game.escape.spawn_t = 0.0
+    game.escape.update(0.2)
+    game.escape.obstacles[0].x = game.escape._runner_x()
+    game.escape.update(1.0 / 60.0)
+    check(game.dodge_lives == lives_before_hit - 1, "the other lane is safe")
+    game.bill_timer = 0.05
+    game._process(0.1) # 主循环里 bill_timer 递减，escape 检测到就结算
+    check(game.phase == "playing" and game.score == int(game.settings.bill_reward), "surviving the run clears bill and rewards")
 
     # win
     key_press(KEY_R)

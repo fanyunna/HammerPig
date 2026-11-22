@@ -108,6 +108,7 @@ const Hammer3DScript := preload("res://scripts/hammer3d.gd")
 const WheelScript := preload("res://scripts/lucky_wheel.gd")
 const CardBuildScript := preload("res://scripts/card_build.gd")
 const DayEventsScript := preload("res://scripts/day_events.gd")
+const EscapeScript := preload("res://scripts/escape.gd")
 var bills_fx # 账单效果：电费停电 / 信用卡利息 / 房租催收（BillManagerScript 实例）
 var hammer3d # 独立透明视口中的立体锤光标
 var earned_total := 0 # 本局累计赚到的钱（房租催收按它跨阈值触发）
@@ -148,6 +149,7 @@ var double_timer := 0.0
 var wheel # 幸运转盘：独立子节点，低侵入，只读写 main 的公开状态
 var build # 卡片2.0：构筑/成长卡系统（合并版移植），低侵入
 var day_events # 天数里程碑小游戏（当铺/赌桌/电话）：独立子节点，低侵入
+var escape # 逃跑场面（夺门而出+双车道跑酷）：替换旧的圆圈躲弹幕，独立子节点
 var combo_count := 0
 var combo_timer := 0.0
 var combo_max := 0
@@ -206,6 +208,8 @@ func _ready() -> void:
 	bills_fx = BillManagerScript.new()
 	build = CardBuildScript.new() # 卡片2.0：RefCounted，不进场景树，只吃 main 的公开状态
 	day_events = DayEventsScript.new()
+	escape = EscapeScript.new()
+	escape.setup(self)
 	add_child(day_events)
 	day_events.setup(self)
 	load_meta()
@@ -1101,6 +1105,7 @@ func reset_game() -> void:
 		wheel.reset_run() # 新局：机会/连击/三个 buff 计时全部清零（多余的金猪视口上面已随 pig3d 裁掉）
 	build.reset() # 新局：本局构筑卡全部清空
 	day_events.reset_run() # 新局：里程碑日程重排，排队事件清空
+	escape.reset_run() # 逃跑场面复位（防结算瞬间残留在 intro/run 态）
 	queue_redraw()
 
 func _process(delta: float) -> void:
@@ -1226,13 +1231,12 @@ func _process(delta: float) -> void:
 		if card_type == "collect":
 			update_collect(delta)
 		else:
-			update_dodge(delta)
-	# 3D 舞台：只在考核期间活着。结束就关渲染并清场，不给主画面留残影、也不白烧 GPU。
+			escape.update(delta) # 逃跑场面：开场演出 + 双车道跑酷（十五轮）
+	# 3D 舞台：只在凑钱考核期间活着。逃跑场面是横版 2D 自绘，不走 3D 舞台。
 	if challenge3d != null:
-		if phase == "challenge":
+		if phase == "challenge" and card_type == "collect":
 			challenge3d.set_active(true)
-			challenge3d.sync(coins, dodgers, hammer_position,
-				"collect" if card_type == "collect" else "dodge", invincible_timer)
+			challenge3d.sync(coins, dodgers, hammer_position, "collect", invincible_timer)
 		else:
 			challenge3d.set_active(false)
 	for i in range(particles.size() - 1, -1, -1):
@@ -1328,6 +1332,12 @@ func _unhandled_input(event: InputEvent) -> void:
 					queue_redraw()
 					return
 	if event is InputEventKey and event.pressed and not event.echo:
+		if phase == "challenge" and card_type == "dodge" and escape != null:
+			# 逃跑场面：↑↓/W/S 换道，空格跳过开场演出。先于 B/账本等全局键处理
+			if event.keycode in [KEY_UP, KEY_W, KEY_DOWN, KEY_S, KEY_SPACE, KEY_ENTER]:
+				escape.handle_key(event.keycode)
+				queue_redraw()
+				return
 		if event.keycode == KEY_B: # 账本：开 / 收起
 			if bill_detail >= 0:
 				bill_detail = -1
@@ -1439,9 +1449,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			elif CONTINUE_RECT.has_point(point) or CARD_RECT.has_point(point):
 				Sound.play("click")
 				apply_card()
-		elif phase == "challenge":
-			if card_type == "collect":
-				click_coin(point)
+	elif phase == "challenge":
+		if card_type == "collect":
+			click_coin(point)
+		else:
+			escape.handle_click(point) # 逃跑场面：点上下半屏换道 / 跳过演出
 		elif phase == "finished" or phase == "bankrupt":
 			if LEGACY_SHOP_RECT.has_point(point): # 结算后正好清点家底：顺手逛逛传承商店
 				Sound.play("click")
@@ -2163,6 +2175,7 @@ func start_challenge() -> void:
 		dodger_spawn_timer = 0.0
 		dodge_lives = int(settings.dodge_lives)
 		invincible_timer = 0.0
+		escape.start() # 夺门而出：开场演出后进入双车道跑酷
 
 func finish_challenge(success: bool) -> void:
 	coins.clear()
@@ -2261,46 +2274,6 @@ func update_collect(delta: float) -> void:
 		finish_challenge(true)
 	elif bill_timer <= 0.0:
 		finish_challenge(false)
-
-func update_dodge(delta: float) -> void:
-	invincible_timer = maxf(0.0, invincible_timer - delta)
-	dodger_spawn_timer -= delta
-	if dodger_spawn_timer <= 0.0:
-		spawn_dodger()
-		dodger_spawn_timer = float(settings.dodger_spawn_interval)
-	for i in range(dodgers.size() - 1, -1, -1):
-		var d: Dictionary = dodgers[i]
-		var dp: Vector2 = d.position
-		var dir: Vector2 = hammer_position - dp
-		if dir.length() > 4.0:
-			d.position += dir.normalized() * float(settings.dodger_speed) * delta
-		d.life -= delta
-		if d.life <= 0.0:
-			dodgers.remove_at(i)
-			continue
-		if invincible_timer <= 0.0:
-			var cur: Vector2 = d.position
-			if hammer_position.distance_squared_to(cur) <= 26.0 * 26.0:
-				dodge_lives -= 1
-				invincible_timer = float(settings.dodge_invincible)
-				spawn_particles(cur)
-				dodgers.remove_at(i)
-	if dodge_lives <= 0:
-		finish_challenge(false)
-	elif bill_timer <= 0.0:
-		finish_challenge(true)
-
-func spawn_dodger() -> void:
-	var side := randi() % 4
-	var area := CHALLENGE_STAGE.grow(-30.0)
-	var pos: Vector2
-	match side:
-		0: pos = Vector2(randf_range(area.position.x, area.end.x), area.position.y)
-		1: pos = Vector2(randf_range(area.position.x, area.end.x), area.end.y)
-		2: pos = Vector2(area.position.x, randf_range(area.position.y, area.end.y))
-		_: pos = Vector2(area.end.x, randf_range(area.position.y, area.end.y))
-	dodger_uid += 1
-	dodgers.append({"position": pos, "life": randf_range(6.0, 9.0), "seed": randf() * TAU, "dcid": dodger_uid})
 
 func click_coin(point: Vector2) -> void:
 	for i in range(coins.size() - 1, -1, -1):
@@ -2847,7 +2820,7 @@ func _draw() -> void:
 		if card_type == "collect":
 			draw_collect()
 		else:
-			draw_dodge()
+			escape.draw(self) # 逃跑场面：横版 2D 自绘，不走 3D 舞台（十五轮）
 	else:
 		draw_rect(Rect2(0, 0, 1280, 800), Color(0.04, 0.07, 0.07, 0.78))
 		if phase == "card":
@@ -3253,8 +3226,8 @@ func draw_card() -> void:
 	else: # dodge
 		card_badge(accent, "¥" + str(bill_amount), 32)
 		text_center("限时 " + str(int(bill_time)) + " 秒", 640, 464, 18, Color("#c7d5e0"))
-		text_center("躲开催债小游戏", 640, 486, 18, Color("#c9b08a"))
-		text_center("被抓住就失败", 640, 508, 16, Color("#e7a6a4"))
+		text_center("夺门而逃 · 沿街狂奔", 640, 486, 18, Color("#c9b08a"))
+		text_center("被抓满 3 次就失败", 640, 508, 16, Color("#e7a6a4"))
 	button(CONTINUE_RECT, label, true, accent)
 	text_center(hint, 640, 652, 17, Color("#b1c0b8"))
 	draw_set_transform(Vector2.ZERO)
@@ -3365,29 +3338,6 @@ func draw_coin(c: Dictionary) -> void:
 		draw_circle(pos, 20, Color("#efbc72"))
 		draw_arc(pos, 17, 0.0, TAU, 24, Color("#7a4f18"), 3)
 		text_at("¥", pos + Vector2(-8, 8), 20, Color("#5e3c12"))
-
-func draw_dodge() -> void:
-	draw_challenge_header("躲开催债", "应付 ¥" + str(bill_amount) + "　　撑到时间结束就算付清",
-		"移动鼠标甩开催债人 · 被碰到扣一颗心", dodge_lives)
-	if draw_challenge_stage():
-		return
-	for d in dodgers:
-		draw_dodger(d)
-	draw_player()
-
-func draw_dodger(d: Dictionary) -> void:
-	var pos: Vector2 = d.position
-	draw_circle(pos, 20, Color("#5e2a2a"))
-	draw_circle(pos, 16, Color("#b23b3b"))
-	draw_line(pos + Vector2(-10, -7), pos + Vector2(-3, -3), Color("#2a0e0e"), 3)
-	draw_line(pos + Vector2(10, -7), pos + Vector2(3, -3), Color("#2a0e0e"), 3)
-	text_at("催", pos + Vector2(-9, 7), 18, Color.WHITE)
-
-func draw_player() -> void:
-	var pos := hammer_position
-	var col := Color("#a4d007") if invincible_timer > 0.0 else Color("#66c0f4")
-	draw_circle(pos, 15, Color("#0a1518"))
-	draw_circle(pos, 12, col)
 
 func draw_heart(pos: Vector2) -> void:
 	draw_circle(pos + Vector2(-4, -2), 5, Color("#e7a6a4"))
