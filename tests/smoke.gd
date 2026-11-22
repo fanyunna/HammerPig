@@ -1425,8 +1425,8 @@ func run() -> void:
         "a wrong click fails immediately")
     check(game.score == score_before_calls + 120, "failing the calls costs no money")
     check(game.stamina < stamina_before_calls_fail, "failing the calls drains stamina")
-    game.day_events.handle_key(KEY_SPACE)
-    check(not game.day_events.is_open(), "confirming the calls result closes the popup")
+    game.day_events.handle_click(Vector2(640, 673)) # CONFIRM_RECT 中心：结果态「认了」用鼠标也要能点掉（真机踩过：只有空格能关）
+    check(not game.day_events.is_open(), "the calls result button is clickable with the mouse, not just space")
     # —— 三场弹窗都不会残留到新局 ——
     game.reset_game()
     check(not game.day_events.is_open() and game.day_events.served == 0,

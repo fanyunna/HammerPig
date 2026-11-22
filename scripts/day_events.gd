@@ -379,6 +379,11 @@ func _dice_settle() -> void:
 # ---------------------------------------------------------------- 催债电话连打
 
 func _calls_click(point: Vector2) -> void:
+	if calls_state == "result":
+		# 结果态的「收下/认了」按钮：当铺和赌桌各自处理了自己的结果点击，电话这里此前漏了
+		if CONFIRM_RECT.has_point(point):
+			_close()
+		return
 	if calls_state != "play":
 		return
 	for i in range(mini(calls_seq.size(), CALL_SLOTS.size())):
