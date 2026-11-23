@@ -114,6 +114,7 @@ var hammer3d # 独立透明视口中的立体锤光标
 var earned_total := 0 # 本局累计赚到的钱（房租催收按它跨阈值触发）
 var last_observed_score := 0
 var vignette_tex: ImageTexture # 停电暗角贴图（开局生成一次）
+var glow_tex: ImageTexture # 灯泡辉光贴图：中心亮、边缘透明的径向渐变（开局生成一次）
 var bonus_timer := 0.0 # 支付电费后的挥锤冷却减免还剩多久
 var blackout_fade := 0.0 # 停电暗化的渐入进度（0→1，避免闪进闪出）
 var collection_flash := 0.0 # 房东催收的红色警告脉冲
@@ -218,6 +219,7 @@ func _ready() -> void:
 	bills_fx.setup(bill_data)
 	bills_fx.collection_triggered.connect(_on_collection_triggered)
 	vignette_tex = _make_vignette() # 停电暗角用；headless 下也只是生成一张空图，不会崩
+	glow_tex = _make_glow_texture() # 灯泡光晕/光锥共用：比叠圆片平滑得多，没有硬边色带
 	_load_art_textures() # 美术贴图：读不到的键不进字典，绘制处自动回退 3D 图元 / 2D 自绘
 	# 开场序幕：headless 下关掉，否则自动化测试第一下点击会被序幕吃掉
 	intro_open = bool(story.get("intro_enabled", true)) and not DisplayServer.get_name().contains("headless")
@@ -2603,23 +2605,57 @@ func bulb_brightness_at(t: float) -> float:
 func bulb_brightness() -> float:
 	return bulb_brightness_at(elapsed)
 
-## 屋顶吊灯：画在 _draw 最上层（暗化矩形之后）—— 它是光源，不该被自己造成的暗压住。
-## 位置在顶部中央：那里没有 HUD，光晕淡淡溢到信息面板上正好像灯光洒下来。
+## 屋顶吊灯（十七轮重画）：吸顶盘 → 吊线 → 黄铜螺纹灯座 → 梨形玻璃泡 → 可见灯丝。
+## 光不再只是泡边一圈：亮时一束暖光锥真的洒到桌面上，闪到最暗时只剩灯丝一点残红。
+## 所有明暗都由 bulb_brightness() 驱动 —— 它怎么闪，整盏灯和房间就一起怎么抖。
+## 画在 _draw 最上层（暗化矩形之后）：它是光源，不该被自己造成的暗压住。
 func draw_bulb() -> void:
-	var tip := Vector2(640, 74)
-	var center := tip + Vector2(0, 18)
-	var b := bulb_brightness()
-	draw_line(Vector2(640, 0), tip, Color("#2e2620"), 3.0) # 吊线
-	panel(Rect2(628, 72, 24, 16), Color("#8a6a42"), 3) # 灯座
-	if b > 0.03: # 光晕：闪到最暗时只剩一圈残光
-		draw_circle(center, 100.0 * (0.55 + 0.45 * b), Color(1.0, 0.84, 0.52, 0.12 * b))
-		draw_circle(center, 48.0, Color(1.0, 0.88, 0.58, 0.20 * b))
-	var glass := Color(0.30, 0.26, 0.20).lerp(Color(1.0, 0.92, 0.62), b) # 暗时发灰、亮时暖黄
-	draw_circle(center, 15.0, glass)
-	draw_arc(center, 15.0, 0.0, TAU, 24, Color("#4a382a"), 1.5)
-	if b > 0.4: # 亮起来才看得见灯丝
-		draw_line(center + Vector2(-4, 5), center + Vector2(0, -5), Color("#fff3c4"), 1.5)
-		draw_line(center + Vector2(0, -5), center + Vector2(4, 5), Color("#fff3c4"), 1.5)
+	var b := clampf(bulb_brightness(), 0.0, 1.0)
+	var tip := Vector2(640, 96) # 玻璃泡中心
+	# 天花板吸顶盘 + 吊线
+	draw_circle(Vector2(640, 7), 8.0, Color("#3a2c20"))
+	draw_arc(Vector2(640, 7), 8.0, 0.0, TAU, 20, Color("#241b13"), 1.5)
+	draw_line(Vector2(640, 13), Vector2(640, 62), Color("#2e2620"), 3.0)
+	# 光：全部用径向渐变辉光贴图 —— 叠三层：桌面大光池、光锥、贴身光晕，全无硬边
+	if b > 0.03 and glow_tex != null:
+		draw_texture_rect(glow_tex, Rect2(tip.x - 330, tip.y - 60, 660, 660), false,
+			Color(1.0, 0.80, 0.48, 0.34 * b)) # 洒到桌面的光池
+		draw_texture_rect(glow_tex, Rect2(tip.x - 185, tip.y - 50, 370, 500), false,
+			Color(1.0, 0.84, 0.52, 0.30 * b)) # 拉长的光锥
+		draw_texture_rect(glow_tex, Rect2(tip.x - 92, tip.y - 92, 184, 184), false,
+			Color(1.0, 0.88, 0.58, 0.55 * b)) # 贴身光晕
+	# 玻璃泡：梨形轮廓（右半自顶到底，左半镜像回来），暗时发灰、亮时暖黄透亮
+	var glass := Color(0.24, 0.21, 0.19).lerp(Color(1.0, 0.94, 0.60), b)
+	var pts := PackedVector2Array([
+		tip + Vector2(0, -17), tip + Vector2(7, -14), tip + Vector2(11, -8), tip + Vector2(13, 0),
+		tip + Vector2(12, 8), tip + Vector2(8, 15), tip + Vector2(0, 18),
+		tip + Vector2(-8, 15), tip + Vector2(-12, 8), tip + Vector2(-13, 0),
+		tip + Vector2(-11, -8), tip + Vector2(-7, -14),
+	])
+	draw_colored_polygon(pts, glass)
+	if b > 0.5: # 亮时玻璃内底部透出暖光，泡体像真的在发光而不是被涂黄
+		draw_circle(tip + Vector2(0, 8), 9.0, Color(1.0, 0.9, 0.55, 0.30 * b))
+	# 灯丝：V 形支架托着 W 形发光丝；亮度越高丝越白越粗，断电时只剩暗红残丝
+	var wire_col := Color("#3a2c22")
+	draw_line(tip + Vector2(-6, -14), tip + Vector2(-4, -2), wire_col, 1.5)
+	draw_line(tip + Vector2(6, -14), tip + Vector2(4, -2), wire_col, 1.5)
+	var fil_col := Color(0.55, 0.20, 0.10).lerp(Color(1.0, 0.96, 0.72), b)
+	draw_polyline(PackedVector2Array([
+		tip + Vector2(-4, -2), tip + Vector2(-2, 4), tip + Vector2(0, -3),
+		tip + Vector2(2, 4), tip + Vector2(4, -2),
+	]), fil_col, 1.5 + 1.5 * b)
+	if b > 0.35: # 点亮时灯丝贴身一圈辉光
+		draw_circle(tip, 11.0, Color(1.0, 0.93, 0.62, 0.28 * b))
+	# 玻璃左上的高光：暗时几乎看不见，亮起来才显出"玻璃"质感
+	draw_circle(tip + Vector2(-6, -7), 4.0, Color(1.0, 1.0, 0.92, 0.65 * (0.25 + 0.75 * b)))
+	var outline := pts.duplicate()
+	outline.append(pts[0])
+	draw_polyline(outline, Color("#4a382a"), 1.5)
+	# 黄铜螺纹灯座压在玻璃泡收口上，盖住接缝
+	panel(Rect2(631, 60, 18, 20), Color("#8a6a42"), 4)
+	for i in range(3):
+		draw_line(Vector2(633, 66 + i * 4), Vector2(647, 66 + i * 4), Color("#5e4526"), 1.5)
+	draw_rect(Rect2(629, 78, 22, 3), Color("#5e4526"))
 
 ## 暗角贴图：中心透明、越靠边越黑，开局生成一次。
 ## 用贴图而不是叠十几层矩形，一帧就两次 draw，加再多猪也不心疼。
@@ -2633,6 +2669,21 @@ func _make_vignette() -> ImageTexture:
 			var dy := float(y) / float(n - 1) * 2.0 - 1.0
 			var d := mini(sqrt(dx * dx + dy * dy) / 1.414, 1.0)
 			img.set_pixel(x, y, Color(ink.r, ink.g, ink.b, pow(d, 2.4)))
+	return ImageTexture.create_from_image(img)
+
+
+## 灯泡辉光贴图：中心白、越靠边越透明的径向渐变。
+## 光晕最忌讳叠几层恒定透明度的圆 —— 暗背景上会显出一圈圈硬边色带，
+## 改成一张渐变图按需染色拉伸，光池 / 光锥 / 贴身光晕三个层共用。
+func _make_glow_texture() -> ImageTexture:
+	var n := 128
+	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
+	for y in range(n):
+		for x in range(n):
+			var dx := (float(x) + 0.5) / n * 2.0 - 1.0
+			var dy := (float(y) + 0.5) / n * 2.0 - 1.0
+			var d := clampf(sqrt(dx * dx + dy * dy), 0.0, 1.0)
+			img.set_pixel(x, y, Color(1, 1, 1, pow(1.0 - d, 2.6)))
 	return ImageTexture.create_from_image(img)
 
 
