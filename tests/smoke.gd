@@ -565,20 +565,23 @@ func run() -> void:
     game.seen_types["fat"] = true
     check(game.pig_legend().contains("大肚猪"), "...and adds them once you have met one")
 
-    # --- 弹卡不许糊掉爆钱的反馈：当前首卡阈值 ¥160，且要等半秒 ---
+    # --- 弹卡不许糊掉爆钱的反馈：首卡阈值、间隔都从 balance 读，别再写死 ---
     var real_types: Array = game.settings["pig_types"]
     game.settings["pig_types"] = [
         {"id": "fat", "label": "大肚猪", "weight": 100, "hp": 1, "value": 10, "speed": 0.0, "scale": 1.3}
     ]
     key_press(KEY_R)
     game.gamble_used = true # 隔离：这段测卡片节奏，别让硬币插进来
-    check(game.next_card == 160 and game.card_delay == 0.0, "the first card waits until ¥160")
-    for i in range(15):
+    var card_first := int(game.settings.card_first_at)
+    var card_step := int(game.settings.card_interval)
+    check(game.next_card == card_first and game.card_delay == 0.0, "the first card waits until the configured threshold")
+    # 每头猪 ¥10：先打到差一击就跨过阈值，确认阈值之前不弹卡
+    for i in range(card_first / 10 - 1):
         click(game.pigs[0].position)
         game._process(float(game.settings.respawn_seconds) + 0.1) # 等它重生，否则下一锤没东西可打
     check(game.phase == "playing" and game.card_delay == 0.0, "still playing below the card threshold")
-    click(game.pigs[0].position) # 达到 ¥160
-    check(game.next_card == 295, "crossing the threshold schedules the next one")
+    click(game.pigs[0].position) # 刚好跨过阈值
+    check(game.next_card == card_first + card_step, "crossing the threshold schedules the next one")
     check(game.phase == "playing", "the card does NOT pop on the same frame the pig bursts")
     check(game.card_delay > 0.0, "...it waits for the money-jingle to finish")
     game.cooldown = 0.18
