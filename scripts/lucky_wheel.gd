@@ -229,7 +229,10 @@ func _process(delta: float) -> void:
 		if spin_t >= SPIN_TIME:
 			finish_spin()
 		queue_redraw()
-	elif popup_open or double_left > 0.0 or slow_left > 0.0 or fast_left > 0.0 or _hud_visible():
+	elif popup_open or double_left > 0.0 or slow_left > 0.0 or fast_left > 0.0 or _hud_visible() \
+			or main.bill_open or main.bill_detail >= 0:
+		# 账单打开时也要重绘：_draw 会整块早退，不重绘的话旧的转盘画面
+		# 就一直糊在账单上面（正是"转盘一直也在"的元凶）
 		queue_redraw()
 
 
@@ -278,9 +281,9 @@ func _apply_result() -> void:
 
 
 func _hud_visible() -> bool:
-	# 账本摊开时抽奖按钮照常显示并可点（它画在最上层，点击由 main 的账本分支优先派发过来）；
-	# 单张账单放大（bill_detail >= 0）仍是模态，按钮照旧隐藏
-	if main == null or main.phase != "playing" or main.intro_open or main.bill_detail >= 0:
+	# 翻账单时转盘整个让位：账本 / 放大单都是模态，右上角再挂个转盘会压住账单内容。
+	# （原来账本里还能点抽奖，实际玩起来是"看账单时手滑抽奖"，去掉更干净。）
+	if main == null or main.phase != "playing" or main.intro_open or main.bill_open or main.bill_detail >= 0:
 		return false
 	return main.gamble_state != "flip" and main.gamble_state != "result"
 
@@ -292,6 +295,8 @@ func _draw() -> void:
 		return
 	if popup_open:
 		_draw_popup()
+		return
+	if main.bill_open or main.bill_detail >= 0: # 翻账单时整块 HUD 收起（buff 小卡也不留）
 		return
 	_draw_buff_chips()
 	if _hud_visible():

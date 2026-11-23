@@ -344,7 +344,12 @@ func run() -> void:
     game.bill_open = true
     game._process(0.1)
     check(game.cooldown == 0.5, "reading the ledger pauses the round")
+    check(not game.wheel._hud_visible(), "the lucky-wheel HUD steps aside while the ledger is open")
     game.bill_open = false
+    check(game.wheel._hud_visible(), "the lucky-wheel HUD comes back after the ledger closes")
+    game.bill_detail = 0
+    check(not game.wheel._hud_visible(), "the lucky-wheel HUD also hides behind a magnified bill")
+    game.bill_detail = -1
     check(game.ledger_page_count() > 1, "bills spread over several pages")
     game.bill_page = 99
     game.clamp_bill_page()

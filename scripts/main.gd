@@ -1533,10 +1533,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				bill_detail = -1
 			queue_redraw()
 			return
-		if bill_open: # 账本摊开着：点纸放大，点外面收起
-			if wheel != null and wheel.handle_click(point): # 压在账本右上角的抽奖按钮：点它不翻账本
-				queue_redraw()
-				return
+		if bill_open: # 账本摊开着：点纸放大，点外面收起（转盘这时已收起，不再派发点击）
 			if LEDGER_RECT.has_point(point):
 				var idx := ledger_index_at(point)
 				if idx >= 0:
@@ -3156,15 +3153,17 @@ func _draw() -> void:
 		else:
 			draw_bankrupt()
 	draw_pig_tip() # 新猪的说明书：画在猪之上、卡片之下（打开卡片时别挡着）
+	# 停电暗化先压：账单是模态界面，不能被房间的明暗闪到、也不该叠一层灰
+	draw_blackout()
 	if bill_open:
 		draw_ledger()
 	if bill_detail >= 0:
 		draw_bill_detail()
 	draw_collection_flash() # 催收警告：只在屏幕边缘画一圈，不挡任何操作
 	draw_gamble_flip() # 抛硬币的翻面/落定动画，永远盖在最上层
-	draw_blackout() # 电费未缴：灯泡闪烁、房间随它忽明忽暗
-	draw_challenge_warning() # 考核预告横幅：压在暗化之上，断电时也看得见"考核要来了"
-	draw_bulb() # 灯泡永远画在暗化之上：它是光源，不该被自己造成的暗压住
+	if not (bill_open or bill_detail >= 0): # 翻账单时吊灯和预告横幅都让位：账单是模态的
+		draw_challenge_warning() # 考核预告横幅：压在暗化之上，断电时也看得见"考核要来了"
+		draw_bulb() # 灯泡永远画在暗化之上：它是光源，不该被自己造成的暗压住
 	if help_open:
 		draw_rect(Rect2(0, 0, 1280, 800), Color(0, 0, 0, 0.75))
 		panel(Rect2(190, 190, 900, 420), Color("#37251a"), 16)
