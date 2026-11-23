@@ -117,7 +117,7 @@ var last_observed_score := 0
 var vignette_tex: ImageTexture # 停电暗角贴图（开局生成一次）
 var glow_tex: ImageTexture # 灯泡辉光贴图：中心亮、边缘透明的径向渐变（开局生成一次）
 var bulb_tex: Texture2D # 精绘灯泡精灵（tools/gen_bulb.py 离线生成）：玻璃渐变/灯丝辉光/黄铜灯座都烤在图里
-var paper_tex: Texture2D # 旧纸纤维贴图（tools/gen_paper.py 生成，四边无缝）：按格拼贴，纸多大都不会被拉长
+var paper_atlas: Dictionary # 旧报纸账单贴图：key "宽x高" → 变体数组（tools/gen_newsprint.py 离线生成，撕边缺角烘在 alpha 里）
 var bonus_timer := 0.0 # 支付电费后的挥锤冷却减免还剩多久
 var blackout_fade := 0.0 # 停电暗化的渐入进度（0→1，避免闪进闪出）
 var collection_flash := 0.0 # 房东催收的红色警告脉冲
@@ -278,7 +278,16 @@ func _load_art_textures() -> void:
 	hammer_tex = _load_png_texture(ART_DIR + "hammer_hand.png")
 	bg_tex = _load_png_texture(ART_DIR + "bg_western.png")
 	bulb_tex = _load_png_texture(ART_DIR + "bulb_lit.png")
-	paper_tex = _load_png_texture(ART_DIR + "paper_grain.png")
+	# 旧报纸账单贴图：四种显示尺寸 × 各几张变体，按账单号挑一张
+	for key in ["236x74", "182x100", "420x570", "46x30"]:
+		var variants: Array[Texture2D] = []
+		for i in range(4):
+			var tex := _load_png_texture(ART_DIR + "billpaper_%s_%d.png" % [key, i])
+			if tex == null:
+				break
+			variants.append(tex)
+		if not variants.is_empty():
+			paper_atlas[key] = variants
 
 
 ## 开局/重开：从目录里随机抽 start_count 张不重复的账单，按金额升序（小额在上，先还得起）
@@ -684,56 +693,30 @@ func _paper_outline(rect: Rect2, seed_value: int) -> PackedVector2Array:
 	return outline
 
 
-## 一张旧纸：底色 → 纸纤维（贴图按格铺，绝不拉伸）→ 四边四角的陈年黄 →
-## 霉斑 / 茶渍 / 折痕 → 磨损的褐色纸边。随机全部由 seed_value 决定，静止时不会跳。
-func paper_sheet(rect: Rect2, tint: Color, seed_value: int, aged := 1.0, stains := true) -> void:
+## 一张旧报纸：撕边、缺角、毛茬、油渍、折痕、边缘氧化全部烘在贴图里
+## （tools/gen_newsprint.py 按四种显示尺寸各生成几张变体），代码只负责
+## 按账单号挑一张 + 把字排在安全区。贴图缺失时回退到手裁轮廓的纯色纸。
+## tint 现在是调制色：正常 Color.WHITE，账单还不起时压灰。
+func paper_sheet(rect: Rect2, tint: Color, seed_value: int, _aged := 1.0, _stains := true,
+		shadow := Vector2(3, 4)) -> void:
+	var key := "%dx%d" % [roundi(rect.size.x), roundi(rect.size.y)]
+	var variants: Variant = paper_atlas.get(key)
+	if variants == null or (variants as Array).is_empty():
+		_paper_sheet_fallback(rect, tint, seed_value)
+		return
+	var list: Array = variants
+	var tex: Texture2D = list[int(_paper_hash(seed_value, 7) * float(list.size())) % list.size()]
+	if shadow != Vector2.ZERO: # 影子 = 同一张纸染黑：撕边形状完全一致
+		draw_texture_rect(tex, Rect2(rect.position + shadow, rect.size), false, Color(0.02, 0.04, 0.04, 0.34))
+	draw_texture_rect(tex, rect, false, tint)
+
+
+## 贴图缺失时的兜底：手裁轮廓 + 暗角发黄，至少不像一张 UI 卡片
+func _paper_sheet_fallback(rect: Rect2, tint: Color, seed_value: int) -> void:
 	var outline := _paper_outline(rect, seed_value)
 	draw_colored_polygon(outline, tint)
-	# 纸纤维：格子按纸的尺寸均分，贴图四边无缝，接缝看不出来
-	if paper_tex != null:
-		var cell := 88.0
-		var cols := maxi(1, int(ceil(rect.size.x / cell)))
-		var rows := maxi(1, int(ceil(rect.size.y / cell)))
-		var cw := rect.size.x / float(cols)
-		var ch := rect.size.y / float(rows)
-		for cx in range(cols):
-			for cy in range(rows):
-				draw_texture_rect(paper_tex,
-					Rect2(rect.position + Vector2(cx * cw, cy * ch), Vector2(cw + 0.7, ch + 0.7)), false)
-	# 陈年发黄：暗角贴图拉满整张纸 —— 角落比中间老得多，且平滑无硬边
 	if vignette_tex != null:
-		draw_texture_rect(vignette_tex, rect, false, Color(0.40, 0.25, 0.09, 0.44 * aged))
-	if stains:
-		# 霉斑：辉光贴图染成褐色当柔和污块，比硬边圆自然得多
-		if glow_tex != null:
-			var blots := 2 + int(_paper_hash(seed_value, 91) * 2.0)
-			for s in range(blots):
-				var radius := 9.0 + _paper_hash(seed_value, 100 + s) * 24.0
-				var center := rect.position + Vector2(
-					rect.size.x * (0.10 + 0.80 * _paper_hash(seed_value, 110 + s)),
-					rect.size.y * (0.10 + 0.80 * _paper_hash(seed_value, 120 + s)))
-				draw_texture_rect(glow_tex,
-					Rect2(center - Vector2(radius, radius) * 2.0, Vector2(radius, radius) * 4.0),
-					false, Color(0.42, 0.28, 0.11, 0.13 * aged))
-		# 大约三分之一的纸被杯子烫过：一圈淡淡茶渍
-		if _paper_hash(seed_value, 77) > 0.58:
-			var cup := rect.position + Vector2(rect.size.x * 0.72, rect.size.y * 0.30)
-			var cup_r := minf(rect.size.x, rect.size.y) * 0.30
-			draw_arc(cup, cup_r, 0.0, TAU, 30, Color(0.48, 0.30, 0.12, 0.15 * aged), 1.6)
-			draw_arc(cup, maxf(4.0, cup_r - 2.0), 0.0, TAU, 30, Color(0.48, 0.30, 0.12, 0.07 * aged), 1.0)
-	# 折痕：一道亮一道暗，读起来才像被折过的纸
-	var creases := 1 + int(_paper_hash(seed_value, 55) * 2.0)
-	for c in range(creases):
-		var t := 0.24 + 0.46 * _paper_hash(seed_value, 60 + c)
-		var slope := 0.10 if c % 2 == 0 else -0.07
-		var a := Vector2(rect.position.x, rect.position.y + rect.size.y * t)
-		var b := Vector2(rect.end.x, rect.position.y + rect.size.y * (t + slope))
-		draw_line(a, b, Color(1.0, 0.99, 0.92, 0.20), 1.0)
-		draw_line(a + Vector2(0, 1.2), b + Vector2(0, 1.2), Color(0.28, 0.18, 0.08, 0.09), 1.0)
-	# 磨损的纸边：一道极淡的褐色，纸就不像"贴"在桌上的一个方块
-	var closed := outline.duplicate()
-	closed.append(outline[0])
-	draw_polyline(closed, Color(0.33, 0.22, 0.10, 0.34 * aged), 1.2)
+		draw_texture_rect(vignette_tex, rect, false, Color(0.40, 0.25, 0.09, 0.44))
 
 
 ## 一张纸质账单（够比例排版，所以桌上一沓、账本里一张、放大的一张都能复用）
@@ -743,20 +726,15 @@ func draw_bill_paper(r: Rect2, b: Dictionary, can_pay: bool, tilt: float, lift: 
 	var rect := Rect2(-half, r.size)
 	# 旧法由账单号 + 金额决定：翻账本时每张纸都不一样，但画面不动它就不会闪
 	var seed_value := absi(String(b.get("no", "0")).hash()) + int(b.get("amount", 0))
-	var paper := Color("#f1e7cd") if can_pay else Color("#d8ceb6")
-	# 影子跟着纸的毛边走，才不是贴上去的一块方影
-	draw_colored_polygon(_paper_outline(Rect2(rect.position + Vector2(3 + lift, 4 + lift), rect.size), seed_value),
-		Color(0.04, 0.07, 0.07, 0.36))
-	paper_sheet(rect, paper, seed_value, 0.9)
+	# 还不起的那几张更灰更旧（贴图已含纸色，这里只调明暗）
+	paper_sheet(rect, Color.WHITE if can_pay else Color(0.76, 0.74, 0.70), seed_value,
+		1.0, true, Vector2(3 + lift, 4 + lift))
 	# 左侧骑缝红条：颜料被纸吃进去，边缘不齐
 	draw_colored_polygon(PackedVector2Array([
 		Vector2(-half.x, -half.y + 7), Vector2(-half.x + 5, -half.y + 6),
 		Vector2(-half.x + 5, half.y - 6), Vector2(-half.x, half.y - 7),
 	]), Color(0.66, 0.24, 0.17, 0.82) if can_pay else Color(0.50, 0.31, 0.26, 0.66))
-	# 右下折角：掀起的那一小块背面比正面暗
-	var fold := PackedVector2Array([half, half - Vector2(13, 0), half - Vector2(0, 13)])
-	draw_colored_polygon(fold, paper.darkened(0.15))
-	draw_line(fold[1], fold[2], Color(0.34, 0.24, 0.11, 0.32), 1.0)
+	# （右下的缺角是贴图自己撕掉的，代码里不再画折角）
 	# 预印的横格线：真账单是带表格的，线比纸深一点点就够
 	var line_col := Color(0.58, 0.50, 0.36, 0.5) if can_pay else Color(0.55, 0.50, 0.42, 0.4)
 	draw_line(Vector2(-half.x + 12, -half.y + r.size.y * 0.58), Vector2(half.x - 12, -half.y + r.size.y * 0.58), line_col, 1.0)
@@ -813,8 +791,7 @@ func draw_bills() -> void:
 		var amount := bill_pay_amount(index)
 		# 桌上这一沓也用真纸：手心那几张更旧一点（被翻得最勤）
 		var paper_seed := absi(String(bill.get("no", "0")).hash()) + amount
-		draw_colored_polygon(_paper_outline(Rect2(rect.position + Vector2(2, 3), rect.size), paper_seed), Color(0.03, 0.05, 0.05, 0.4))
-		paper_sheet(rect, Color("#efe5cb"), paper_seed, 0.75, false)
+		paper_sheet(rect, Color.WHITE, paper_seed, 1.0, false, Vector2(2, 3))
 		var name := String(bill.name)
 		if name.length() > 10:
 			name = name.substr(0, 9) + "…"
@@ -912,10 +889,10 @@ func draw_bill_detail() -> void:
 	draw_set_transform(DETAIL_RECT.get_center(), -0.012, Vector2.ONE)
 	var half := DETAIL_RECT.size / 2.0
 	var rect := Rect2(-half, DETAIL_RECT.size)
-	var paper := Color("#efe4c8")
+	var paper := Color("#efe4c8") # 只用来算明细横线的颜色；纸本体已是撕边贴图
 	var detail_seed := absi(String(b.get("no", "0")).hash()) + int(b.amount)
-	draw_colored_polygon(_paper_outline(Rect2(rect.position + Vector2(8, 10), rect.size), detail_seed), Color(0.03, 0.05, 0.05, 0.5))
-	paper_sheet(rect, paper, detail_seed, 1.25) # 摊开看的那张最老：霉斑、茶渍、折痕都全
+	paper_sheet(rect, Color.WHITE if can_pay else Color(0.78, 0.76, 0.72), detail_seed,
+		1.0, true, Vector2(8, 10)) # 摊开看的那张最旧：缺角、水渍、十字折痕都在图里
 	# 抬头红条：印刷红压得浅一点，下沿压一道暗线，像油墨渗进纸里
 	var header := Rect2(-half.x + 1, -half.y + 1, DETAIL_RECT.size.x - 2, 94)
 	draw_rect(header, Color(0.72, 0.28, 0.21, 0.88))
@@ -2804,7 +2781,8 @@ func draw_bill_stack(base: Vector2, count: int) -> void:
 		var off := Vector2(sin(i * 2.1) * 5.0, -float(i) * 6.0) # 偏移要够大，否则叠纸看起来只有一张
 		var last: bool = i == n - 1
 		# HUD 里的小图标也走真纸：只留毛边和一点点旧，不放霉斑（太小会看成脏点）
-		paper_sheet(Rect2(base + off, Vector2(46, 30)), Color("#efe5cb") if last else Color("#e1d7bf"), 17 + i, 0.6, false)
+		paper_sheet(Rect2(base + off, Vector2(46, 30)),
+			Color.WHITE if last else Color(0.82, 0.80, 0.77), 17 + i, 1.0, false, Vector2.ZERO)
 	# 这里原来在纸右边写着「待还 ¥xxx」，正好压住中部那行提示：HUD 这一条只有 98px 高，
 	# 横向再塞一个数字就撞车。待还总额在账本封面和桌上那沓纸上有（「合计 ¥」），不缺这一处。
 
