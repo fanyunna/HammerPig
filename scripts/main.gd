@@ -115,6 +115,7 @@ var earned_total := 0 # 本局累计赚到的钱（房租催收按它跨阈值�
 var last_observed_score := 0
 var vignette_tex: ImageTexture # 停电暗角贴图（开局生成一次）
 var glow_tex: ImageTexture # 灯泡辉光贴图：中心亮、边缘透明的径向渐变（开局生成一次）
+var bulb_tex: Texture2D # 精绘灯泡精灵（tools/gen_bulb.py 离线生成）：玻璃渐变/灯丝辉光/黄铜灯座都烤在图里
 var bonus_timer := 0.0 # 支付电费后的挥锤冷却减免还剩多久
 var blackout_fade := 0.0 # 停电暗化的渐入进度（0→1，避免闪进闪出）
 var collection_flash := 0.0 # 房东催收的红色警告脉冲
@@ -268,6 +269,7 @@ func _load_art_textures() -> void:
 			pig_tex[id] = tex
 	hammer_tex = _load_png_texture(ART_DIR + "hammer_hand.png")
 	bg_tex = _load_png_texture(ART_DIR + "bg_western.png")
+	bulb_tex = _load_png_texture(ART_DIR + "bulb_lit.png")
 
 
 ## 开局/重开：从目录里随机抽 start_count 张不重复的账单，按金额升序（小额在上，先还得起）
@@ -2605,26 +2607,36 @@ func bulb_brightness_at(t: float) -> float:
 func bulb_brightness() -> float:
 	return bulb_brightness_at(elapsed)
 
-## 屋顶吊灯（十七轮重画）：吸顶盘 → 吊线 → 黄铜螺纹灯座 → 梨形玻璃泡 → 可见灯丝。
-## 光不再只是泡边一圈：亮时一束暖光锥真的洒到桌面上，闪到最暗时只剩灯丝一点残红。
-## 所有明暗都由 bulb_brightness() 驱动 —— 它怎么闪，整盏灯和房间就一起怎么抖。
+## 屋顶吊灯：优先用精绘贴图（tools/gen_bulb.py 离线生成，玻璃径向渐变 +
+## 高斯模糊灯丝辉光 + 黄铜螺纹灯座都在图里），亮度靠调制色压暗 ——
+## 暗态是关灯的玻璃剪影，只剩一点火头。贴图缺失时回退矢量画法。
 ## 画在 _draw 最上层（暗化矩形之后）：它是光源，不该被自己造成的暗压住。
 func draw_bulb() -> void:
 	var b := clampf(bulb_brightness(), 0.0, 1.0)
-	var tip := Vector2(640, 96) # 玻璃泡中心
+	var tip := Vector2(640, 100) # 玻璃泡中心（与贴图内灯丝位置对齐）
 	# 天花板吸顶盘 + 吊线
 	draw_circle(Vector2(640, 7), 8.0, Color("#3a2c20"))
 	draw_arc(Vector2(640, 7), 8.0, 0.0, TAU, 20, Color("#241b13"), 1.5)
-	draw_line(Vector2(640, 13), Vector2(640, 62), Color("#2e2620"), 3.0)
-	# 光：全部用径向渐变辉光贴图 —— 叠三层：桌面大光池、光锥、贴身光晕，全无硬边
+	draw_line(Vector2(640, 13), Vector2(640, 58), Color("#2e2620"), 3.0)
+	# 三层辉光（径向渐变贴图，无硬边）：桌面大光池、拉长光锥、贴身光晕
 	if b > 0.03 and glow_tex != null:
 		draw_texture_rect(glow_tex, Rect2(tip.x - 330, tip.y - 60, 660, 660), false,
-			Color(1.0, 0.80, 0.48, 0.34 * b)) # 洒到桌面的光池
+			Color(1.0, 0.80, 0.48, 0.34 * b))
 		draw_texture_rect(glow_tex, Rect2(tip.x - 185, tip.y - 50, 370, 500), false,
-			Color(1.0, 0.84, 0.52, 0.30 * b)) # 拉长的光锥
+			Color(1.0, 0.84, 0.52, 0.30 * b))
 		draw_texture_rect(glow_tex, Rect2(tip.x - 92, tip.y - 92, 184, 184), false,
-			Color(1.0, 0.88, 0.58, 0.55 * b)) # 贴身光晕
-	# 玻璃泡：梨形轮廓（右半自顶到底，左半镜像回来），暗时发灰、亮时暖黄透亮
+			Color(1.0, 0.88, 0.58, 0.55 * b))
+	if bulb_tex != null:
+		var lamp_mod := Color(0.30, 0.24, 0.20).lerp(Color.WHITE, b)
+		draw_texture_rect(bulb_tex, Rect2(606, 50, 68, 85), false, lamp_mod)
+		if b < 0.5: # 熄灭时灯丝只剩一点暗红火头
+			draw_circle(tip, 9.0, Color(1.0, 0.45, 0.15, 0.20 * (1.0 - b)))
+			draw_circle(tip, 3.5, Color(1.0, 0.55, 0.2, 0.55 * (1.0 - b)))
+	else:
+		_draw_bulb_vector(tip, b)
+
+## 矢量兜底画法（贴图加载失败时用）：梨形泡 + W 形灯丝 + 简易灯座。
+func _draw_bulb_vector(tip: Vector2, b: float) -> void:
 	var glass := Color(0.24, 0.21, 0.19).lerp(Color(1.0, 0.94, 0.60), b)
 	var pts := PackedVector2Array([
 		tip + Vector2(0, -17), tip + Vector2(7, -14), tip + Vector2(11, -8), tip + Vector2(13, 0),
@@ -2633,9 +2645,6 @@ func draw_bulb() -> void:
 		tip + Vector2(-11, -8), tip + Vector2(-7, -14),
 	])
 	draw_colored_polygon(pts, glass)
-	if b > 0.5: # 亮时玻璃内底部透出暖光，泡体像真的在发光而不是被涂黄
-		draw_circle(tip + Vector2(0, 8), 9.0, Color(1.0, 0.9, 0.55, 0.30 * b))
-	# 灯丝：V 形支架托着 W 形发光丝；亮度越高丝越白越粗，断电时只剩暗红残丝
 	var wire_col := Color("#3a2c22")
 	draw_line(tip + Vector2(-6, -14), tip + Vector2(-4, -2), wire_col, 1.5)
 	draw_line(tip + Vector2(6, -14), tip + Vector2(4, -2), wire_col, 1.5)
@@ -2644,14 +2653,12 @@ func draw_bulb() -> void:
 		tip + Vector2(-4, -2), tip + Vector2(-2, 4), tip + Vector2(0, -3),
 		tip + Vector2(2, 4), tip + Vector2(4, -2),
 	]), fil_col, 1.5 + 1.5 * b)
-	if b > 0.35: # 点亮时灯丝贴身一圈辉光
-		draw_circle(tip, 11.0, Color(1.0, 0.93, 0.62, 0.28 * b))
-	# 玻璃左上的高光：暗时几乎看不见，亮起来才显出"玻璃"质感
+	if b > 0.5:
+		draw_circle(tip + Vector2(0, 8), 9.0, Color(1.0, 0.9, 0.55, 0.30 * b))
 	draw_circle(tip + Vector2(-6, -7), 4.0, Color(1.0, 1.0, 0.92, 0.65 * (0.25 + 0.75 * b)))
 	var outline := pts.duplicate()
 	outline.append(pts[0])
 	draw_polyline(outline, Color("#4a382a"), 1.5)
-	# 黄铜螺纹灯座压在玻璃泡收口上，盖住接缝
 	panel(Rect2(631, 60, 18, 20), Color("#8a6a42"), 4)
 	for i in range(3):
 		draw_line(Vector2(633, 66 + i * 4), Vector2(647, 66 + i * 4), Color("#5e4526"), 1.5)
