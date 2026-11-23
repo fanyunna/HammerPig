@@ -53,6 +53,10 @@ var pawn_clicks := 0 # 0 = 第一刀待砍，1 = 只剩最后一刀
 var pawn_locked_mul := 0.0 # 第一刀锁定的倍率
 var pawn_final := false # 已经砍到第二刀（结果不可反悔）
 var pawn_item := "" # 典当品名
+var open_t := 0.0 # 弹窗入场动画：0→1，"啪"地拍在桌上的弹出感
+var pawn_bang := 0.0 # 当铺拍板落锤动画剩余时间
+var dice_flip := 0.0 # 赌桌庄家翻牌动画剩余时间（>0 时暗牌还扣着）
+var settle_t := 0.0 # 结算演出剩余时间（筹码/电话的胜负表现）
 
 # —— 赌桌状态 ——
 var dice_state := "" # bet / player / dealer / result
@@ -99,6 +103,14 @@ func _process(delta: float) -> void:
 	if main == null:
 		return
 	gap_t = maxf(0.0, gap_t - delta)
+	if active != "": # 四个公共动画计时：入场弹出 / 拍板 / 翻牌 / 结算演出
+		open_t = minf(1.0, open_t + delta * 4.0)
+		pawn_bang = maxf(0.0, pawn_bang - delta)
+		dice_flip = maxf(0.0, dice_flip - delta)
+		settle_t = maxf(0.0, settle_t - delta)
+	if active == "dice" and dice_state == "dealer": # 翻牌动画走完：庄家才补牌结算
+		if dice_flip <= 0.0:
+			_dealer_play()
 	_schedule_check()
 	if active == "pawn" and pawn_state == "swing":
 		pawn_t += delta
@@ -141,6 +153,10 @@ func _can_open() -> bool:
 
 func _open(id: String) -> void:
 	active = id
+	open_t = 0.0 # 重新起播入场动画
+	pawn_bang = 0.0
+	dice_flip = 0.0
+	settle_t = 0.0
 	match id:
 		"pawn":
 			pawn_state = "swing"
@@ -246,6 +262,7 @@ func _pawn_click(point: Vector2) -> void:
 			return
 		pawn_locked_mul = mul
 		pawn_state = "preview"
+		pawn_bang = 0.35 # 拍板一锤：柜台上的小猪震一晃
 		Sound.play("click")
 		return
 	if pawn_state == "preview":
@@ -269,6 +286,8 @@ func _pawn_apply(mul: float) -> void:
 	main.score += price
 	pawn_state = "result"
 	pawn_locked_mul = mul
+	pawn_bang = 0.35
+	settle_t = 0.9 # 柜台上滚铜钱的演出
 	main.popups.append({"position": Vector2(640, 420), "life": 1.4,
 		"text": "典当成交 +¥" + str(price)})
 	Sound.play("cash", 1.0 if mul < 1.6 else 1.1)
@@ -336,13 +355,18 @@ func _dice_deal(bet: int) -> void:
 	Sound.play("card")
 
 func _dice_stand() -> void:
-	dice_state = "dealer"
+	dice_state = "dealer" # 先播翻牌演出：庄家翻开暗牌，动画走完才补牌
+	dice_flip = 0.55
+	Sound.play("card")
+
+func _dealer_play() -> void:
 	while hand_value(dice_dealer) < DEALER_STAND: # 庄家 17 点停牌（可预期，不作弊）
 		dice_dealer.append(_draw_card())
 	_dice_settle()
 
 func _dice_settle() -> void:
 	dice_state = "result"
+	settle_t = 0.9 # 筹码的胜负演出
 	var pv := hand_value(dice_hand)
 	var dv := hand_value(dice_dealer)
 	if pv > 21:
@@ -407,6 +431,7 @@ func _calls_pick(i: int) -> void:
 func _calls_end(win: bool) -> void:
 	calls_state = "result"
 	calls_win = win
+	settle_t = 0.9 # 电话的胜负演出
 	if win:
 		main.score += CALL_REWARD
 		# 顺手把房东的下一轮催收往后推一个门槛：这一单算你把催收员打发掉了
@@ -427,6 +452,8 @@ func draw(p) -> void:
 		return
 	p.panel(PANEL_RECT, Color("#37251a"), 18)
 	p.draw_rect(PANEL_RECT.grow(-4), Color("#e0b552"), false, 2.0) # 暖黄描边，和转盘一个基调
+	if open_t < 1.0: # 入场弹出：一圈渐隐的金光，像弹窗"砕"地拍在桌上
+		p.draw_rect(PANEL_RECT.grow(6.0 + 10.0 * (1.0 - open_t)), Color(1.0, 0.88, 0.55, 0.55 * (1.0 - open_t)), false, 3.0)
 	match active:
 		"pawn":
 			_draw_pawn()
@@ -444,6 +471,8 @@ func _draw_pawn() -> void:
 	var p = main
 	_panel_title("当铺砍价", "老板眯着眼：「这猪成色一般，你看着办。」")
 	var cx := PANEL_RECT.get_center().x
+	var dy := (1.0 - _ease_out()) * 24.0 # 入场时场景从底下浮上来落定
+	_draw_pawn_sign(p)
 	p.text_center("典当品：" + pawn_item, cx, 240, 20, Color("#e7c98a"))
 	var bar := Rect2(360, 300, 560, 46)
 	# 三档价格区：灰 0.7~1.0 / 黄 1.0~1.6 / 红 1.6~2.2
@@ -469,6 +498,21 @@ func _draw_pawn() -> void:
 	if pawn_state == "swing" and pawn_clicks == 1:
 		tag = "最后一刀"
 	p.text_center(tag + "：¥" + str(price), cx, 420, 30, Color("#ffe092") if hot else Color("#efbc72"))
+	# —— 场景：柜台后眯眼算价的老板 + 柜台上待价而沽的小猪 ——
+	var counter_y := 548.0
+	_draw_boss(p, Vector2(824, 498) + Vector2(0, dy * 0.4), 34)
+	_draw_pawn_pig(p, Vector2(448, 520) + Vector2(0, dy * 0.6), 44)
+	if pawn_bang > 0.0: # 拍板落锤：锤子从扬起到砸下
+		_draw_mallet(p, Vector2(520, 452), pawn_bang / 0.35)
+	if pawn_state == "result": # 成交：柜台上滚出一把铜钱
+		for i in range(4):
+			var coin := Vector2(566 + 27 * i, counter_y - 10 - (i % 2) * 7)
+			p.draw_circle(coin, 11, Color("#d9a94a"))
+			p.draw_circle(coin, 5, Color("#543823"))
+	# 柜台最后画：正好挡住老板的身子和小猪垫子的底
+	p.panel(Rect2(310, counter_y, 660, 18), Color("#7a5433"), 3)
+	p.panel(Rect2(310, counter_y + 18, 660, 64), Color("#543823"), 0)
+	p.draw_line(Vector2(310, counter_y + 18), Vector2(970, counter_y + 18), Color("#3a2c20"), 2.0)
 	match pawn_state:
 		"swing":
 			p.text_center("点面板内任意位置下刀" + ("（就这一锤子买卖了）" if pawn_final else "（第一刀，砍完还能再砍一次）"),
@@ -503,24 +547,33 @@ func _draw_dice() -> void:
 	var p = main
 	_panel_title("赌桌比大小", "余额 ¥" + str(int(main.score)) + " · 黑猪庄家推来一摞筹码：「押多少，朋友？」")
 	var cx := PANEL_RECT.get_center().x
+	# 绿呢赌台：金线镶边，呢面上有一道弧形的押注线
+	var felt := Rect2(312, 136, 656, 372)
+	p.panel(felt, Color("#2e523b"), 14)
+	p.draw_rect(felt.grow(-5), Color("#e0b552"), false, 1.8)
+	p.draw_arc(felt.get_center() + Vector2(0, 44), 236.0, PI + 0.4, TAU - 0.4, 48, Color(1.0, 0.9, 0.7, 0.15), 1.5)
+	p.text_center("·  二 十 一 点  ·", cx, 168, 14, Color("#c9d8b0"))
+	# 庄家：戴遮阳帽檐的黑猪 + 台面右侧一摞备用筹码
+	_draw_dealer_pig(p, Vector2(398, 210), 30)
+	_draw_chip_stack(p, Vector2(916, 236), 3, Color("#d9a94a"))
 	match dice_state:
 		"bet":
 			if dice_poor:
 				p.text_center("兜里不足 ¥50 —— 庄家摆摆手：「赊账玩一把，赢了 ¥" + str(POOR_WIN) + "，输了掉体力。」", cx, 260, 17, Color("#e7c98a"))
 				p.button(CONFIRM_RECT, "赊账开局")
 			else:
-				p.text_center("选个押注额（押注有硬上限：余额 35%，不许梭哈破产）", cx, 240, 16, Color("#b59a7c"))
+				p.text_center("选个押注额（押注有硬上限：余额 35%，不许梭哈破产）", cx, 240, 16, Color("#e7c98a"))
 				var bet3 := clampi(int(main.score) * 3 / 10, 50, int(main.score) * 35 / 100)
 				p.button(BET_RECTS[0], "押 ¥50")
 				p.button(BET_RECTS[1], "押 ¥120")
 				p.button(BET_RECTS[2], "押 ¥" + str(bet3))
 		"player", "dealer", "result":
-			# 庄家一手（第二张在 player 阶段背面朝下）
+			# 庄家一手（暗牌在翻牌动画走完前一直扣着）
 			var dn := dice_dealer.size()
 			for i in range(dn):
 				var rect := Rect2(cx - (dn * 86) / 2.0 + i * 86 - 35, 190, 70, 100)
-				_card_face(dice_dealer[i], rect, dice_state != "player" or i == 0)
-			p.text_center("庄家 " + (str(hand_value(dice_dealer)) if dice_state != "player" else "?"), cx, 320, 17, Color("#b59a7c"))
+				_card_face(dice_dealer[i], rect, dice_state == "result" or i == 0)
+			p.text_center("庄家 " + (str(hand_value(dice_dealer)) if dice_state == "result" else "?"), cx, 320, 17, Color("#c9d8b0"))
 			# 玩家一手
 			var pn := dice_hand.size()
 			for i in range(pn):
@@ -529,6 +582,22 @@ func _draw_dice() -> void:
 			var pv := hand_value(dice_hand)
 			var pv_color := Color("#e06c5c") if pv > 21 else Color("#efbc72")
 			p.text_center("你 " + str(pv) + ("（爆了！）" if pv > 21 else ""), cx, 490, 20, pv_color)
+			# 你押出去的筹码堆：摆在手牌左下，输赢各有表现
+			var chip_col := Color("#a5432a")
+			var chip_n := 3
+			if dice_state == "result":
+				match dice_outcome:
+					"win":
+						chip_col = Color("#d9a94a") # 赢了：涨成金色的两倍堆
+						chip_n = 5
+					"lose":
+						chip_col = Color("#5a5148") # 输了：灰扑扑地只剩一枚
+						chip_n = 1
+					"push":
+						chip_col = Color("#8a6a42")
+			_draw_chip_stack(p, Vector2(396, 466), chip_n, chip_col)
+			var chip_label := "赊账局" if dice_poor else "押注 ¥" + str(dice_bet)
+			p.text_center(chip_label, 396, 494, 13, Color("#c9d8b0"))
 			var wager := POOR_WIN if dice_poor else dice_bet
 			match dice_state:
 				"player":
@@ -560,21 +629,28 @@ func _draw_calls() -> void:
 		var c: Vector2 = CALL_SLOTS[i]
 		var num := i + 1
 		var dimmed: bool = calls_state == "play" and calls_done[i]
+		var ringing: bool = calls_state == "memo" and calls_seq[calls_memo_i] == i
 		var ring := Color("#ffe092")
-		if calls_state == "memo" and calls_seq[calls_memo_i] == i:
-			ring = Color("#ffe092") # 记忆阶段：正在响的那枚
-		elif calls_state == "play" and not dimmed:
+		if calls_state == "play" and not dimmed:
 			ring = Color("#e0503f")
-		else:
+		elif not ringing:
 			ring = Color("#5a5148") if not dimmed else Color("#3a332c")
-		p.draw_circle(c, CALL_RADIUS + 6.0, Color(0.09, 0.06, 0.04, 0.85))
-		p.draw_arc(c, CALL_RADIUS + 6.0, 0.0, TAU, 40, ring, 2.5)
-		p.draw_circle(c, CALL_RADIUS, Color("#241a10") if not dimmed else Color("#1a140c"))
+		# 正在响的那枚左右发抖：来电是会震的
+		var cc := c + (Vector2(sin(main.elapsed * 42.0 + float(i) * 1.7) * 3.5, 0) if ringing else Vector2.ZERO)
+		p.draw_circle(cc, CALL_RADIUS + 6.0, Color(0.09, 0.06, 0.04, 0.85))
+		p.draw_arc(cc, CALL_RADIUS + 6.0, 0.0, TAU, 40, ring, 2.5)
+		p.draw_circle(cc, CALL_RADIUS, Color("#241a10") if not dimmed else Color("#1a140c"))
+		# 听筒图标：一眼看懂"这是来电"，不是六个抽象圆圈
+		_draw_handset(p, cc + Vector2(0, -12), 19, Color("#efbc72") if not dimmed else Color("#554636"))
+		p.text_center(str(num), cc.x, cc.y + 26, 18, Color("#efbc72") if not dimmed else Color("#554636"))
 		# 响铃动画：记忆阶段高亮气泡时画一圈扩散的波
-		if calls_state == "memo" and calls_seq[calls_memo_i] == i:
+		if ringing:
 			var wave := 6.0 + 10.0 * (1.0 - calls_t / maxf(0.01, float(CALL_MEMO[mini(calls_round - 1, CALL_MEMO.size() - 1)]) / float(calls_seq.size())))
-			p.draw_arc(c, CALL_RADIUS + wave, 0.0, TAU, 32, Color(1.0, 0.87, 0.57, 0.4), 2.0)
-		p.text_center(str(num), c.x, c.y, 30, Color("#efbc72") if not dimmed else Color("#554636"))
+			p.draw_arc(cc, CALL_RADIUS + wave, 0.0, TAU, 32, Color(1.0, 0.87, 0.57, 0.4), 2.0)
+	# 桌角的老式电话机：一切骚扰的源头——通话时机身发抖、红灯闪
+	_draw_phone(p, Vector2(640, 616))
+	if calls_state == "play": # 限时阶段：整块面板边缘红光脉动
+		p.draw_rect(PANEL_RECT.grow(-3), Color(0.88, 0.32, 0.24, 0.22 + 0.16 * sin(main.elapsed * 9.0)), false, 3.0)
 	match calls_state:
 		"result":
 			var line := "+¥" + str(CALL_REWARD) + " · 房东的下一轮催收推迟了" if calls_win else "体力 -" + str(int(CALL_FAIL_STAMINA))
@@ -582,3 +658,110 @@ func _draw_calls() -> void:
 			p.button(CONFIRM_RECT, "收下" if calls_win else "认了")
 		"play":
 			p.text_center("错一次就前功尽弃", cx, 560, 14, Color("#554636"))
+
+# ---------------------------------------------------------------- 视觉小零件（三个玩法共用的绘制件）
+
+func _ease_out() -> float:
+	return 1.0 - pow(1.0 - open_t, 3.0)
+
+func _ellipse(p, c: Vector2, rx: float, ry: float, col: Color) -> void:
+	var pts := PackedVector2Array()
+	for i in range(22):
+		var a := TAU * float(i) / 22.0
+		pts.append(c + Vector2(cos(a) * rx, sin(a) * ry))
+	p.draw_polygon(pts, PackedColorArray([col]))
+
+func _draw_chip(p, pos: Vector2, r: float, col: Color) -> void:
+	# 赌场筹码：外圈白条纹 + 深色内芯
+	p.draw_circle(pos, r, col)
+	for i in range(6):
+		var a := TAU * float(i) / 6.0
+		var dir := Vector2(cos(a), sin(a))
+		p.draw_line(pos + dir * (r * 0.62), pos + dir * r, Color("#f2e8d5"), 4.5)
+	p.draw_circle(pos, r * 0.55, col.darkened(0.25))
+	p.draw_arc(pos, r * 0.55, 0.0, TAU, 24, Color("#f2e8d5"), 1.5)
+
+func _draw_chip_stack(p, base: Vector2, n: int, col: Color) -> void:
+	p.draw_circle(base + Vector2(0, 4), 20.0, Color(0, 0, 0, 0.25)) # 底下一片影子
+	for i in range(maxi(1, n)):
+		_draw_chip(p, base + Vector2(0, -8.0 * i), 17.0, col)
+
+func _draw_boss(p, c: Vector2, s: float) -> void:
+	# 当铺老板：瓜皮帽 + 眯成缝的笑眼 + 八字胡，身子藏在柜台后面
+	_ellipse(p, c + Vector2(0, s * 1.5), s * 0.95, s * 0.8, Color("#2e2620"))
+	p.draw_circle(c + Vector2(0, -s * 0.62), s * 0.66, Color("#33261a")) # 帽
+	p.draw_circle(c + Vector2(0, -s * 1.1), s * 0.11, Color("#a5432a")) # 帽顶红结
+	p.draw_circle(c, s * 0.72, Color("#e3b489")) # 脸
+	for dx in (-1.0, 1.0):
+		p.draw_arc(c + Vector2(dx * s * 0.3, -s * 0.08), s * 0.15, 0.35, PI - 0.35, 12, Color("#3a2c20"), 2.5) # 眯眼︶
+	p.draw_line(c + Vector2(-s * 0.1, s * 0.26), c + Vector2(-s * 0.42, s * 0.42), Color("#4a382a"), 3.0) # 八字胡
+	p.draw_line(c + Vector2(s * 0.1, s * 0.26), c + Vector2(s * 0.42, s * 0.42), Color("#4a382a"), 3.0)
+	p.draw_line(c + Vector2(-s * 0.12, s * 0.52), c + Vector2(s * 0.12, s * 0.52), Color("#8a5a3a"), 2.0) # 报着的嘴
+
+func _draw_pawn_pig(p, c: Vector2, s: float) -> void:
+	# 柜台上待价而沽的小陶猪：拍板时会震一晃
+	var amp := (pawn_bang / 0.35) if pawn_bang > 0.0 else 0.0
+	var cc := c + Vector2(sin(main.elapsed * 42.0) * 5.0 * amp, 0)
+	_ellipse(p, c + Vector2(0, s * 0.5), s * 1.35, s * 0.2, Color("#8a3a2e")) # 红绸垫
+	for dx in (-1.0, 1.0):
+		p.draw_circle(cc + Vector2(dx * s * 0.55, -s * 0.7), s * 0.22, Color("#d98a8f")) # 耳朵
+	_ellipse(p, cc, s, s * 0.72, Color("#efb0b6")) # 身体
+	p.draw_circle(cc + Vector2(0, s * 0.2), s * 0.34, Color("#f6c6cb")) # 鼻君
+	p.draw_circle(cc + Vector2(-s * 0.12, s * 0.18), s * 0.055, Color("#b2626a"))
+	p.draw_circle(cc + Vector2(s * 0.12, s * 0.18), s * 0.055, Color("#b2626a"))
+	p.draw_circle(cc + Vector2(-s * 0.42, -s * 0.2), s * 0.07, Color("#3a2620")) # 眼
+	p.draw_circle(cc + Vector2(s * 0.42, -s * 0.2), s * 0.07, Color("#3a2620"))
+	p.draw_rect(Rect2(cc.x - s * 0.2, cc.y - s * 0.76, s * 0.4, s * 0.08), Color("#5a4030")) # 投币口
+
+func _draw_mallet(p, pivot: Vector2, prog: float) -> void:
+	# 拍板的小木槽：prog 1→0，从扬起到落定
+	var ang := lerpf(1.1, -1.7, prog)
+	var tip := pivot + Vector2(cos(ang), sin(ang)) * 56.0
+	p.draw_line(pivot, tip, Color("#6b4a2f"), 6.0)
+	var dir := Vector2(cos(ang), sin(ang))
+	p.draw_circle(tip + Vector2(-dir.y, dir.x) * 10.0, 15.0, Color("#543823"))
+	p.draw_circle(tip + Vector2(-dir.y, dir.x) * 10.0, 7.0, Color("#7a5433"))
+
+func _draw_pawn_sign(p) -> void:
+	# 挂着的"当"字招牌：随风轻晃
+	var top := Vector2(348, 106)
+	var sway := sin(main.elapsed * 1.3) * 5.0
+	var rect := Rect2(322 + sway, 130, 52, 52)
+	p.draw_line(top, Vector2(rect.position.x + 10, rect.position.y), Color("#8a6a4a"), 2.0)
+	p.draw_line(top, Vector2(rect.end.x - 10, rect.position.y), Color("#8a6a4a"), 2.0)
+	p.panel(rect, Color("#a5432a"), 6)
+	p.draw_rect(rect.grow(-3), Color("#e0b552"), false, 1.5)
+	p.text_center("当", rect.get_center().x, rect.get_center().y + 2, 30, Color("#ffe9c8"))
+
+func _draw_dealer_pig(p, c: Vector2, s: float) -> void:
+	# 赌桌庄家：一头戴遮阳帽檐的黑猪，"押多少，朋友？"
+	for dx in (-1.0, 1.0):
+		p.draw_circle(c + Vector2(dx * s * 0.62, -s * 0.78), s * 0.26, Color("#3a332c")) # 耳朵
+	p.draw_circle(c, s, Color("#5a5148")) # 头
+	p.draw_circle(c + Vector2(0, s * 0.5), s * 0.44, Color("#6e635a")) # 长哥
+	p.draw_circle(c + Vector2(-s * 0.14, s * 0.5), s * 0.07, Color("#2e2620"))
+	p.draw_circle(c + Vector2(s * 0.14, s * 0.5), s * 0.07, Color("#2e2620"))
+	p.draw_circle(c + Vector2(-s * 0.42, -s * 0.12), s * 0.09, Color("#1a140c")) # 眼
+	p.draw_circle(c + Vector2(s * 0.42, -s * 0.12), s * 0.09, Color("#1a140c"))
+	p.draw_rect(Rect2(c.x - s * 0.95, c.y - s * 0.62, s * 1.9, s * 0.2), Color("#2e523b")) # 帽檐
+	p.draw_rect(Rect2(c.x - s * 0.5, c.y - s * 0.98, s, s * 0.42), Color("#2e523b")) # 帽顶
+
+func _draw_handset(p, c: Vector2, s: float, col: Color) -> void:
+	# 老式听筒：两端圆头 + 向下垂的弧形弓身
+	p.draw_circle(c + Vector2(-s * 0.85, -s * 0.5), s * 0.3, col)
+	p.draw_circle(c + Vector2(s * 0.85, -s * 0.5), s * 0.3, col)
+	p.draw_arc(c + Vector2(0, -s * 0.3), s * 0.9, 0.25, PI - 0.25, 16, col, s * 0.26)
+
+func _draw_phone(p, c: Vector2) -> void:
+	# 桌角的老式转盘电话机：通话时机身发抖、呼叫红灯闪
+	var shaking: bool = calls_state == "memo" or calls_state == "play"
+	var cc := c + (Vector2(sin(main.elapsed * 32.0) * 2.5, 0) if shaking else Vector2.ZERO)
+	p.draw_arc(cc + Vector2(78, 8), 12.0, 0.0, TAU, 20, Color("#8a6a42"), 2.0) # 卷卷的电话线
+	p.draw_arc(cc + Vector2(78, 8), 6.0, 0.0, TAU, 16, Color("#8a6a42"), 2.0)
+	p.panel(Rect2(cc.x - 62, cc.y - 8, 124, 34), Color("#3a2c20"), 6) # 机座
+	p.draw_circle(cc + Vector2(0, 9), 11, Color("#241a10")) # 拨号盘
+	p.draw_arc(cc + Vector2(0, 9), 11, 0.0, TAU, 20, Color("#8a6a42"), 1.5)
+	_draw_handset(p, cc + Vector2(0, -24), 20, Color("#543823")) # 搁在座上的听筒
+	if calls_state != "result" or not calls_win:
+		var lit := 0.55 + 0.4 * sin(main.elapsed * 10.0)
+		p.draw_circle(cc + Vector2(-44, -32), 5.0, Color(0.9, 0.32, 0.25, lit)) # 呼叫红灯

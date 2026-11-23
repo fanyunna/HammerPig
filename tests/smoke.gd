@@ -1395,6 +1395,7 @@ func run() -> void:
     game.day_events.handle_click(Vector2(game.day_events.BET_RECTS[0].get_center()))
     check(game.day_events.dice_state == "player" and game.day_events.dice_bet == 50, "betting deals the hand")
     game.day_events.handle_click(Vector2(game.day_events.STAND_RECT.get_center()))
+    game.day_events._process(0.6) # 快进庄家翻牌动画（0.55s），走完才补牌结算
     check(game.day_events.dice_state == "result" and game.day_events.dice_outcome == "push",
         "equal totals push the bet back")
     check(game.score == 800, "a push costs nothing")
@@ -1413,6 +1414,7 @@ func run() -> void:
     game.day_events.forced_deck.assign([10, 9, 8, 6, 13]) # 玩家 19，庄家 14 → 补一张 13 → 27 爆（第 5 张是给庄家补牌的，别让牌堆抽空进随机）
     game.day_events.handle_click(Vector2(game.day_events.CONFIRM_RECT.get_center()))
     game.day_events.handle_click(Vector2(game.day_events.STAND_RECT.get_center()))
+    game.day_events._process(0.6) # 快进庄家翻牌动画
     check(game.day_events.dice_outcome == "win" and game.score == 40 + 80,
         "the credit game pays the fixed bounty on a dealer bust")
     # —— 催债电话：记忆→复现，全对 +¥120 并推迟催收，点错立即判负只扣体力 ——
