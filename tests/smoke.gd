@@ -1390,33 +1390,73 @@ func run() -> void:
     check(float(chain_pig.respawn) > 0.0 and game.score == s5 + 1,
         "settle_card_break pays a chain-killed pig and schedules its respawn")
 
-    # —— 悬赏板：玩家主动挑战躲催债（零随机触发，赏金递增，输了只扣体力） ——
+    # —— 房东上门 = 躲债：只在"房租欠着 + 收入跨门槛"时触发，不再有主动接单 ——
     game.reset_game()
-    var bounty_cap: int = int(game.settings.get("bounty_per_run", 2))
-    check(game.bounty_left == bounty_cap, "reset grants the bounty attempts")
-    var bills_before_bounty: int = game.bills.size()
-    game.start_bounty()
-    check(game.phase == "challenge" and game.card_type == "dodge", "bounty opens a dodge challenge")
-    check(game.bounty_left == bounty_cap - 1, "starting a bounty consumes one attempt")
-    check(String(game.challenge_bill_tag).is_empty(), "bounty is not bound to any bill")
-    var score_before_bounty: int = game.score
+    game.pending_challenge = {}
+    game.challenge_rest_t = 0.0
+    game.bill_data["challenge_max_per_run"] = 3 # 上一段把打断额度关成了 0：这里恢复
+    game.bill_data["challenge_warning_seconds"] = 0.0 # 立即开考便于断言
+    game.bill_data["challenge_rest_seconds"] = 0.0
+    for b in game.bills: # 账单全部推到远期：别让日历到期考核抢这次触发
+        b["due_day"] = game.game_day + 999
+    # 造一张没还的房租（催收效果挂在房租上）
+    game.bills.append({"name": "房租", "amount": 560, "no": "T999", "id": "rent",
+        "effect_id": "collection", "due": "第999天", "due_day": game.game_day + 999})
+    game.bills_fx.sync(game.bills)
+    var rent_tag := "rent#T999"
+    check(game.bills_fx.is_active("collection"), "unpaid rent puts the collection effect on the table")
+    var bills_before_visit: int = game.bills.size()
+    # 收入跨过第一道门槛（¥100）→ 房东上门排班（预告横幅，然后逃跑场面）
+    game.earned_total = game.bills_fx.collection_next
+    game.last_observed_score = game.score
+    game._process(0.016)
+    check(not game.pending_challenge.is_empty() and String(game.pending_challenge.get("kind", "")) == "dodge",
+        "crossing the rent threshold schedules a landlord dodge")
+    check(bool(game.pending_challenge.get("collection", false)), "the scheduled dodge is a landlord visit")
+    game._process(0.016) # 预告 0 秒：下一帧直接开跑
+    check(game.phase == "challenge" and game.card_type == "dodge" and game.collection_mode,
+        "the landlord visit starts the escape run")
+    var rent_idx := -1
+    for i in range(game.bills.size()):
+        if String(BillManagerScript.tag_of(game.bills[i])) == rent_tag:
+            rent_idx = i
+    check(rent_idx >= 0, "the landlord visit is bound to the unpaid rent bill")
+    check(String(game.challenge_bill_tag) == rent_tag, "the run is bound to that rent, not a random bill")
+    var due_before: int = int(game.bills[rent_idx]["due_day"])
     game.finish_challenge(true)
-    check(game.phase == "playing", "bounty success returns to playing")
-    check(game.score == score_before_bounty + int(game.settings.get("bounty_reward_base", 150)), "bounty success pays the base reward")
-    check(game.bills.size() == bills_before_bounty, "bounty success clears no bills")
-    check(game.bounty_won == 1, "bounty wins are counted for escalation")
-    game.start_bounty()
-    check(game.phase == "challenge", "the second bounty can start after a win")
+    rent_idx = -1
+    for i in range(game.bills.size()):
+        if String(BillManagerScript.tag_of(game.bills[i])) == rent_tag:
+            rent_idx = i
+    check(game.phase == "playing", "dodging the landlord returns to play")
+    check(game.bills.size() == bills_before_visit, "dodging the landlord clears no bills")
+    check(rent_idx >= 0 and int(game.bills[rent_idx]["due_day"]) == maxi(due_before, game.game_day) + 2,
+        "winning only defers the rent: delay, not a free pass")
+    check(rent_idx >= 0 and not bool(game.bills[rent_idx].get("overdue", false)),
+        "a successful dodge leaves the rent unstamped")
+
+    # 输了：房租当场逾期、掉体力
+    game.challenge_rest_t = 0.0
+    game.bills_fx.collection_cd = 0.0
+    game.earned_total = game.bills_fx.collection_next
+    game.last_observed_score = game.score
+    game._process(0.016)
+    check(not game.pending_challenge.is_empty(), "the next threshold brings the landlord back")
+    game._process(0.016)
+    check(game.phase == "challenge", "the second visit also opens a dodge run")
     game.stamina = maxf(game.stamina, 120.0) # 防止体力见底时失败分支被夹在底线、断言随状态漂移
-    var stamina_before_fail: float = game.stamina
+    var stamina_before_visit: float = game.stamina
     game.finish_challenge(false)
-    check(game.phase == "playing", "bounty failure returns to playing")
-    check(game.score == score_before_bounty + int(game.settings.get("bounty_reward_base", 150)), "bounty failure costs no money")
-    check(game.stamina < stamina_before_fail, "bounty failure drains stamina")
-    check(game.stamina >= 6.0, "bounty failure leaves a sliver of stamina")
-    game.start_bounty()
-    check(game.bounty_left == 0, "bounty attempts are capped per run")
-    check(game.phase == "playing", "bounty cannot start with no attempts left")
+    check(game.phase == "playing", "a lost landlord visit returns to play")
+    check(game.stamina < stamina_before_visit and game.stamina >= 6.0,
+        "losing to the landlord drains stamina but leaves a sliver")
+    rent_idx = -1
+    for i in range(game.bills.size()):
+        if String(BillManagerScript.tag_of(game.bills[i])) == rent_tag:
+            rent_idx = i
+    check(rent_idx >= 0 and bool(game.bills[rent_idx].get("overdue", false)),
+        "getting caught stamps the rent overdue on the spot")
+    game.bill_data["challenge_max_per_run"] = 0 # 后续测试不需要打断：额度关掉，免得房东来抢流程
     # —— 天数里程碑小游戏：调度 + 当铺砍价 + 赌桌比大小 + 催债电话连打 ——
     game.reset_game()
     check(game.day_events.served == 0 and game.day_events.pending.is_empty() and not game.day_events.is_open(),

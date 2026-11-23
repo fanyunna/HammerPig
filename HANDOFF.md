@@ -717,6 +717,23 @@ qiaozhu-main（11月10日的另一条开发线）在操作层做了手感重构�
 3. **暗度调轻**：`bills.json` `darkness_alpha` 0.38 → 0.22，且 `draw_blackout` 乘 `(1.0 - 0.5*b)`——灯泡蹿亮的瞬间房间跟着亮一点，明暗节奏本身就是催缴费用的提醒。
 4. 测试 +3（采样 14 个时刻验证闪烁、alpha < 0.3、缴清恒亮），总数 **295**。
 
+### 8.18 第十八轮：考核预告 + 喘息 + 灯泡精绘贴图（2026-11-23）
+
+1. **考核预告横幅**：`pending_challenge` 挂起后不再同帧开考 —— 先亮 3 秒预告横幅（账单名 + 倒计时，红边呼吸，钉在 HUD 下方 y≈190，压不到体力条）。归零才 `start_bill_challenge()`；大步长帧内清零**同帧开考**（两个 if，别写成 if/else，否则补帧/测试跳帧会晚一拍）。时长 `bills.json` `challenge_warning_seconds`。
+2. **喘息冷却**：`finish_challenge()` 设 `challenge_rest_t`（`challenge_rest_seconds`，默认 6s）——期间不挂新考核，也不把到期票盖成逾期（推迟到下次推进）。一次跨多天只给一张票机会（`gave_chance`）。
+3. **灯泡改精绘贴图**：`tools/gen_bulb.py`（PIL+numpy，可重复运行）生成 `assets/art/bulb_lit.png`：梨形轮廓用密集宽度剖面+高斯平滑（手放 8 个点会出波浪）；玻璃径向渐变+边缘暗带+底部内透光；灯丝三层高斯模糊辉光；黄铜灯座圆柱明暗+螺纹。运行时按 `bulb_brightness()` 调制明暗，暗态玻璃剪影+火头；矢量画法保留为 `_draw_bulb_vector` 兜底。⚠️ PIL 的 ImageDraw 在 RGBA 图上画半透明色是**替换像素含 alpha**，不是混合。
+4. 测试 → **304**（+预告/推迟/喘息/贴图加载）。
+
+### 8.19 第十九轮：躲债去主动化 —— 悬赏令撤除，房东上门触发（2026-11-23）
+
+用户："躲债游戏不应该是主动的，应该是有触发条件"。§8.11 的悬赏板（主动点两下接单换赏金）整个撤掉。
+
+1. **触发条件**：房租欠着（`collection` 效果生效）时，累计收入每跨一道门槛（`progress_threshold` ¥100，45s 冷却、每局上限 3 次）`collection_triggered` 发射 → `_on_collection_triggered` 直接**排一场躲债**（`pending_challenge = {tag: 房租tag, kind: "dodge", collection: true}`），同样走预告横幅。≥¥300 账单到期的躲债触发保留。另有叠加保护：已有考核排队 / 喘息冷却中 / **打断额度（challenge_max_per_run）用完** → 这次只闪红不排班（打断额度与日历考核共享）。
+2. **结算语义变了**：躲债赢 = **拖延不是免单** —— 房租 `due_day += dodge_delay_days`（2 天，bills.json effects.collection）、摘逾期章；输 = 房租**当场逾期** + 扣 `dodge_fail_stamina`（25，夹底 6）。`collection_mode` 标记这类考核，`finish_challenge()` 顶部先判它。
+3. **悬赏令 → 催收预警板**：`BOUNTY_RECT` → `COLLECT_BOARD_RECT`（同几何），`draw_bounty_board` → `draw_collect_board`：房租欠着时显示"再赚 ¥N 就上门 / 本局还能来 N 次"，门槛临近（≤30%）红边呼吸；租约已清显示"风平浪静"。**不可点**——点击路径里 `bounty_click` 已删。
+4. **删除**：`start_bounty/bounty_click/bounty_*` 全家、balance.json 四个 bounty_* 键。⚠️ §8.11/8.12 的"悬赏"相关描述已过时，以本节为准。
+5. **测试**：悬赏 13 条断言换房东上门 15 条（排班/绑定/延期不清单/摘逾期/输则当场逾期/掉体力夹底），总数 **304**。⚠️ smoke 里房东上门测试块首尾要把 `challenge_max_per_run` 设回 3 / 末尾归 0 —— 后续测试靠 cap=0 防打断。
+
 ---
 
 ## 9. 3D 视口实现（小猪、桌面与锤子）

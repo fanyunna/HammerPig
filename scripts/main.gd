@@ -23,7 +23,7 @@ const LEGACY_PANEL := Rect2(240, 80, 800, 584) # 传承商店全屏面板
 const LEGACY_CLOSE_RECT := Rect2(585, 600, 110, 40) # 商店关闭按钮（鼠标玩家的出口；键盘 B/Esc 也行）
 const INTRO_RECT := Rect2(112, 476, 234, 52) # 开场序幕的「敲开第一只」按钮
 const RESET_RECT := Rect2(1090, 36, 140, 46)
-const BOUNTY_RECT := Rect2(172, 146, 158, 84) # 悬赏板：钉在余额和体力条之间的木牌（猪活动区之外，狂敲不会误触）
+const COLLECT_BOARD_RECT := Rect2(172, 146, 158, 84) # 催收预警板：钉在余额和体力条之间。只报信不可点 —— 躲债只由条件触发
 const PIG_BOUNDS := Rect2(270, 320, 740, 310) # 小猪在赌桌上的活动范围；同时决定 3D 桌板大小。
 # ↑ 纵向从 230 撑到 310：小猪要铺满整张桌子，挤在中间一条带子里看不出"满桌都是猪"
 const PIG3D_SIZE := 138.0 # 3D 猪纹理的绘制边长（基准；实际尺寸见 pig_size()，由 pig_draw_size 配置）
@@ -98,12 +98,7 @@ var challenge_rest_t := 0.0 # 喘息冷却：考核刚结束的几秒里不再�
 var challenge_count := 0 # 本局已触发的账单考核次数（上限见 bills.json 的 challenge_max_per_run）
 var challenge_bill_tag := "" # 本次考核绑定的账单编号；空 = 不绑账单（老式通用考核）
 var challenge_label := "" # 考核面板上那句"谁到期了、多少钱"
-var bounty_left := 0 # 悬赏板：本局剩下的主动挑战次数
-var bounty_won := 0 # 已赢的悬赏单数：决定下一单的赏金
-var bounty_reward := 0 # 当前这单的赏金
-var bounty_mode := false # 本次考核是悬赏挑战：不绑账单，赢了拿赏金，输了只扣体力
-var bounty_armed := false # 点了第一下，等确认（防狂敲误触）
-var bounty_arm_t := 0.0 # 确认倒计时：超时自动取消
+var collection_mode := false # 本次考核是房东上门躲债：赢了是房租延期（拖延），输了当场逾期
 var swing := 0.0
 const BillManagerScript := preload("res://scripts/bill_manager.gd")
 const Hammer3DScript := preload("res://scripts/hammer3d.gd")
@@ -906,7 +901,9 @@ func swing_cooldown_mul() -> float:
 	return bills_fx.number("blackout", "cooldown_multiplier", 0.9)
 
 
-## 房东上门催收：不扣钱、不生新猪，只给一次明确的警告（任务书 §2.1C 要求首版做轻量事件）
+## 房东上门催收：房租欠着时，收入每跨一道门槛房东就来堵一次门。
+## 不再是"屏幕边缘闪一下"的提醒 —— 这里直接排一场躲债（预告横幅 → 逃跑场面）。
+## 排班条件与日历经期考核同一条队：不叠加、不在喘息冷却里背靠背开跑。
 func _on_collection_triggered(msg: String) -> void:
 	collection_flash = 1.2
 	# 房东敲门是一次强烈的短促冲击；复用桌面震动层，让猪和飞散粒子一起震。
@@ -916,6 +913,17 @@ func _on_collection_triggered(msg: String) -> void:
 		msg = "停电时房东砸门！"
 	popups.append({"position": Vector2(640, 296), "life": 1.6, "text": msg})
 	Sound.play("stamp", 0.72, 1.25)
+	# 打断预算与日历考核共享：一局最多 challenge_max_per_run 次，房东也得排队用额度。
+	var cap := int(bill_data.get("challenge_max_per_run", 3))
+	if phase != "playing" or not pending_challenge.is_empty() or challenge_rest_t > 0.0 \
+			or challenge_count >= cap:
+		return # 已有考核排着队、刚考完在喘、或本局打断额度用完了：这次就当隔着门喊了两句
+	var rent_tag := _collection_bill_tag()
+	if rent_tag.is_empty():
+		return
+	challenge_count += 1
+	pending_challenge = {"tag": rent_tag, "kind": "dodge", "collection": true}
+	challenge_warn_t = float(bill_data.get("challenge_warning_seconds", 3.0))
 
 
 ## 催收警告：屏幕四周闪一圈红，1.2 秒衰减。不做全屏红闪 —— 那会盖住猪和按钮。
@@ -1084,11 +1092,7 @@ func reset_game() -> void:
 	gamble_t = 0.0
 	gamble_heads = true
 	gamble_used = false
-	bounty_left = int(settings.get("bounty_per_run", 2))
-	bounty_won = 0
-	bounty_reward = int(settings.get("bounty_reward_base", 150))
-	bounty_mode = false
-	bounty_armed = false
+	collection_mode = false
 	particles.clear()
 	popups.clear()
 	stamina = float(settings.get("stamina_max", 100))
@@ -1129,10 +1133,6 @@ func reset_game() -> void:
 
 func _process(delta: float) -> void:
 	quick_paid_timer = maxf(0.0, quick_paid_timer - delta)
-	if bounty_armed: # 悬赏确认倒计时：点了第一下迟迟不确认就自动收起
-		bounty_arm_t -= delta
-		if bounty_arm_t <= 0.0:
-			bounty_armed = false
 	sync_cursor() # 必须排在所有提前 return 之前：翻账本时整局是停的，但箭头得还回来
 	if hammer3d == null and not DisplayServer.get_name().contains("headless"):
 		# 编辑器热重载不会重跑 _ready()；运行中的窗口也要能补建新加入的 3D 锤子视口。
@@ -1486,9 +1486,6 @@ func _unhandled_input(event: InputEvent) -> void:
 				Sound.play("click")
 				reset_game()
 		else: # playing：桌边那枚硬币的按钮在前面已经处理过，这里就只剩挥锤了
-			if bounty_click(point): # 悬赏板：点到了就不挥锤（第二下才真正开打）
-				queue_redraw()
-				return
 			if wheel != null and wheel.handle_click(point): # 抽奖按钮：点到了就不挥锤
 				queue_redraw()
 				return
@@ -2117,35 +2114,13 @@ func apply_card(choice := -1) -> void:
 
 ## 账单到期考核：接住 advance_calendar 挂上的那一次机会。
 ## 小额账单考「凑钱」，大额账单（房租、车险这种）考「躲催债」—— 越贵的账，催得越凶。
-## 悬赏板：玩家主动挑战躲催债。不绑账单 —— 赢了拿赏金，输了只掉体力，免去不免单。
-func start_bounty() -> void:
-	if bounty_left <= 0 or phase != "playing" or build.panel_open:
-		return
-	bounty_left -= 1
-	bounty_armed = false
-	bounty_mode = true
-	bounty_reward = int(settings.get("bounty_reward_base", 150)) + bounty_won * int(settings.get("bounty_reward_step", 100))
-	challenge_bill_tag = ""
-	challenge_label = "悬赏挑战 · 赏金 ¥" + str(bounty_reward)
-	card_type = "dodge"
-	start_challenge()
-	Sound.play("stamp", 0.9)
-
-
-## 悬赏板点击：第一下亮起确认，第二下开打。返回 true 表示这一击已被悬赏板消费。
-func bounty_click(point: Vector2) -> bool:
-	if bounty_left <= 0:
-		return false
-	if not BOUNTY_RECT.has_point(point):
-		bounty_armed = false # 点到别处：收起确认，这一下照常挥锤
-		return false
-	if bounty_armed:
-		start_bounty()
-	else:
-		bounty_armed = true
-		bounty_arm_t = 3.0
-		Sound.play("click")
-	return true
+## 躲债不再有"主动接单"的入口：它只由条件触发 —— 大额账单到期，或者房租欠着时房东上门。
+func _collection_bill_tag() -> String:
+	# 催收效果挂在没还的房租上：找到那张房租，就是房东这次要堵你的人质。
+	for bill in bills:
+		if String(bill.get("effect_id", "")) == "collection" and BillManagerScript.is_special(bill):
+			return String(BillManagerScript.tag_of(bill))
+	return ""
 
 
 func start_bill_challenge() -> void:
@@ -2153,6 +2128,7 @@ func start_bill_challenge() -> void:
 		return
 	challenge_bill_tag = String(pending_challenge.get("tag", ""))
 	var kind := String(pending_challenge.get("kind", "collect"))
+	collection_mode = bool(pending_challenge.get("collection", false))
 	pending_challenge = {}
 	challenge_warn_t = 0.0 # 开考即消费掉预告
 	card_type = kind
@@ -2208,24 +2184,35 @@ func finish_challenge(success: bool) -> void:
 	var bound_tag := challenge_bill_tag
 	challenge_bill_tag = ""
 	challenge_label = ""
-	if bounty_mode: # 悬赏挑战的输赢不走账单那套：赢了拿赏金，输了只扣体力
-		bounty_mode = false
+	if collection_mode: # 房东上门：赢了是"拖延"（房租延期，债务还在），输了当场逾期 —— 躲债不是免单
+		collection_mode = false
+		var rent: Dictionary = {}
+		for b in bills:
+			if String(BillManagerScript.tag_of(b)) == bound_tag:
+				rent = b
+				break
 		if success:
-			score += bounty_reward
-			bounty_won += 1
-			if bounty_reward > best_gain:
-				best_gain = bounty_reward # 赏金也是收入，最大单笔要算上它
-			popups.append({"position": Vector2(640, 420), "life": 1.4, "text": "悬赏兑现 +¥" + str(bounty_reward)})
+			var delay := int(bills_fx.number("collection", "dodge_delay_days", 2))
+			if not rent.is_empty():
+				rent["due_day"] = maxi(int(rent.get("due_day", game_day)), game_day) + delay
+				rent["overdue"] = false # 甩掉房东：连逾期章也一并摘了
+				rent["due"] = format_game_date(int(rent["due_day"]))
+			popups.append({"position": Vector2(640, 420), "life": 1.6,
+				"text": "房东被甩掉了 · 房租延期 " + str(delay) + " 天"})
 			Sound.play("cash", 1.05)
 		else:
-			var drain := float(settings.get("bounty_fail_stamina", 40))
-			stamina = maxf(6.0, stamina - drain) # 留一口气：别让玩家因为输了悬赏被体力直接送走
+			var drain := float(bills_fx.number("collection", "dodge_fail_stamina", 25))
+			stamina = maxf(6.0, stamina - drain) # 留一口气：被堵住也不至于直接倒下
 			stamina_flash = 0.6
-			popups.append({"position": Vector2(640, 420), "life": 1.4, "text": "悬赏失败 · 力竭 -" + str(int(drain)) + " 体力"})
-			Sound.play("stamp", 0.6)
+			if not rent.is_empty():
+				rent["overdue"] = true # 上门没躲掉：房租当场逾期
+			popups.append({"position": Vector2(640, 420), "life": 1.6, "text": "被房东堵住了 · 房租当场逾期"})
+			Sound.play("stamp", 0.7)
 		phase = "playing"
 		collected = 0
 		bill_timer = 0.0
+		bills_fx.sync(bills)
+		sort_bills()
 		return
 	if success:
 		var reward := int(settings.bill_reward)
@@ -2697,7 +2684,7 @@ func draw_challenge_warning() -> void:
 	var label := bill_name + " 到期 · " + ("躲催债考核 " if kind == "dodge" else "凑钱考核 ") \
 		+ str(int(ceilf(challenge_warn_t))) + "s"
 	var pulse := 0.72 + 0.28 * sin(elapsed * 9.0) # 红边呼吸：不刺眼但不可能没看见
-	# 挂在 HUD 条下方（y≈190）：压不到体力/悬赏令，也不与连击字打架（考核要来时它让位）
+	# 挂在 HUD 条下方（y≈190）：压不到体力/催收预警板，也不与连击字打架（考核要来时它让位）
 	panel(Rect2(640 - 210, 190, 420, 42), Color("#3a1410"), 12)
 	draw_rect(Rect2(640 - 210, 190, 420, 42), Color(0.88, 0.24, 0.12, 0.5 * pulse), false, 2)
 	text_center(label, 640, 217, 19, Color("#ff9a76"))
@@ -2890,7 +2877,7 @@ func _draw() -> void:
 	panel(Rect2(350, 194, 280 * clampf(stamina / stamina_max, 0.0, 1.0), 13), bar_color, 5)
 	text_at("余额 ¥", Vector2(80, 174), 17, Color("#c9b08a"))
 	text_at(str(score).pad_zeros(3), Vector2(80, 214), 32, Color("#efbc72"))
-	draw_bounty_board() # 悬赏板：钉在余额右侧的木牌
+	draw_collect_board() # 催收预警板：房东还有多远来堵门（只报信，不可点）
 	# 猪的价目表移到底部整行：中部这块只有 220px 宽，四种猪的名字加金额会被账单纸压住
 	# 右上角原来写着「目标 ¥120 摆脱破产」+ 一条进度条，去掉了：把目标写在脸上，玩家就是在为数字打工，
 	# 而不是"再敲一只就够"。round_target 仍然生效（攒够即结算），只是不让玩家盯着倒计时。
@@ -3398,29 +3385,39 @@ func draw_upgrade_choices() -> void:
 
 ## 考核浮层的上半屏 HUD。两种玩法只差标题/说明，排版完全一致 ——
 ## 玩家第二次遇到账单时不用重新认一遍界面。lives = 0 时不画心（凑钱那关没有命）。
-## 悬赏板木牌：钉在 HUD 的余额和体力之间。剩 0 次就褪色；确认中黄框脉冲。
-func draw_bounty_board() -> void:
+## 催收预警板：钉在 HUD 的余额和体力之间。只报信、不可点 —— 躲债只由条件触发，
+## 这块牌子告诉玩家"房东还有多远来堵门"。房租还清就剩一块平静的旧木牌。
+func draw_collect_board() -> void:
 	if phase != "playing":
 		return
-	var dim := bounty_left <= 0
-	panel(BOUNTY_RECT, Color("#2c221a") if dim else Color("#3d2c1c"), 8)
+	var rent_tag := _collection_bill_tag()
+	var rent_due := not rent_tag.is_empty()
+	var cap := int(bills_fx.number("collection", "max_triggers_per_run", 3))
+	var left := maxi(0, cap - bills_fx.collection_count)
+	var gap := maxi(0, int(ceilf(bills_fx.collection_next - earned_total))) if rent_due else 0
+	var threshold := maxf(1.0, bills_fx.number("collection", "progress_threshold", 100.0))
+	var imminent := rent_due and left > 0 and float(gap) <= threshold * 0.3
+	panel(COLLECT_BOARD_RECT, Color("#3d2c1c") if rent_due else Color("#2c221a"), 8)
 	var edge := Color("#8a6a42")
-	if bounty_armed:
-		edge = Color("#ffe092")
-		edge.a = 0.55 + 0.45 * sin(elapsed * 9.0) # 确认中脉冲：一眼看出"再点一下就开打"
-	elif dim:
+	if imminent:
+		edge = Color(0.88, 0.30, 0.18, 0.55 + 0.45 * sin(elapsed * 6.0)) # 快到门槛：红边呼吸
+	elif not rent_due:
 		edge = Color("#4a3a2a")
-	draw_rect(BOUNTY_RECT.grow(-3), edge, false, 2.0)
-	var cx := BOUNTY_RECT.get_center().x
-	text_center("悬赏令", cx, BOUNTY_RECT.position.y + 18, 17, Color("#efbc72") if not dim else Color("#6a5a44"))
-	if dim:
-		text_center("本局已领完", cx, BOUNTY_RECT.position.y + 44, 14, Color("#6a5a44"))
+	draw_rect(COLLECT_BOARD_RECT.grow(-3), edge, false, 2.0)
+	var cx := COLLECT_BOARD_RECT.get_center().x
+	text_center("房东催收", cx, COLLECT_BOARD_RECT.position.y + 18, 17,
+		Color("#efbc72") if rent_due else Color("#6a5a44"))
+	if not rent_due:
+		text_center("租约已清", cx, COLLECT_BOARD_RECT.position.y + 44, 14, Color("#7d6a50"))
+		text_center("风平浪静", cx, COLLECT_BOARD_RECT.position.y + 66, 13, Color("#6a5a44"))
 		return
-	text_center("躲催债 · 赏金 ¥" + str(bounty_reward), cx, BOUNTY_RECT.position.y + 44, 14, Color("#e7c98a"))
-	if bounty_armed:
-		text_center("再点一次开打！", cx, BOUNTY_RECT.position.y + 66, 14, Color("#ffe092"))
-	else:
-		text_center("剩 " + str(bounty_left) + " 次 · 点击接单", cx, BOUNTY_RECT.position.y + 66, 13, Color("#b59a7c"))
+	if left <= 0:
+		text_center("本局不再上门", cx, COLLECT_BOARD_RECT.position.y + 44, 14, Color("#b59a7c"))
+		text_center("房租仍欠着", cx, COLLECT_BOARD_RECT.position.y + 66, 13, Color("#8a6a52"))
+		return
+	text_center("再赚 ¥" + str(gap) + " 就上门", cx, COLLECT_BOARD_RECT.position.y + 44, 14,
+		Color("#ff9a76") if imminent else Color("#e7c98a"))
+	text_center("本局还能来 " + str(left) + " 次", cx, COLLECT_BOARD_RECT.position.y + 66, 13, Color("#b59a7c"))
 
 
 func draw_challenge_header(title: String, info: String, hint: String, lives: int) -> void:

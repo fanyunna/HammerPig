@@ -26,4 +26,13 @@ func run() -> void:
 	game.pending_challenge = {"tag": "rent", "kind": "collect"}
 	game.challenge_warn_t = 2.4
 	await snap("tmp_warning.png")
+
+	# 催收预警板：房租欠着时显示"再赚 ¥N 就上门"
+	game.pending_challenge = {}
+	game.challenge_warn_t = 0.0
+	game.bills.append({"name": "房租", "amount": 560, "no": "T999", "id": "rent",
+		"effect_id": "collection", "due": "第9天", "due_day": game.game_day + 8})
+	game.bills_fx.sync(game.bills)
+	game.earned_total = 40.0
+	await snap("tmp_board.png")
 	quit()
