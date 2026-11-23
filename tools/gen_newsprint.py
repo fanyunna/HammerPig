@@ -34,11 +34,16 @@ PREVIEW_DIR = BASE
 #   ghost   印刷残留种类（rules 横格线 / table 表格+印章 / 空 = 无）
 #   curl    卷角强度（0 = 不卷）
 #   oxide   氧化带系数：卡片上文字要能读，氧化压轻些；大张可以重
+#   bands   文字行带（0~1 的 y 区间）：这些带里污渍/油污减半，字不被糊住
 SHEETS = [
-    dict(w=236, h=74, scale=3, variants=4, folds=('v',), stains=3, specks=True, ghost='rules', curl=0.0, oxide=0.62),
-    dict(w=182, h=100, scale=3, variants=3, folds=('v', 'h'), stains=3, specks=True, ghost='rules', curl=0.55, oxide=0.62),
-    dict(w=420, h=570, scale=2, variants=3, folds=('v', 'h', 'v2'), stains=4, specks=True, ghost='table', curl=1.0, oxide=1.0),
-    dict(w=46, h=30, scale=3, variants=2, folds=(), stains=0, specks=False, ghost='', curl=0.0, oxide=0.8),
+    dict(w=236, h=74, scale=3, variants=4, folds=('v',), stains=4, specks=True, ghost='rules', curl=0.0, oxide=0.62,
+         bands=((0.28, 0.58), (0.76, 0.98))),
+    dict(w=182, h=100, scale=3, variants=3, folds=('v', 'h'), stains=4, specks=True, ghost='rules', curl=0.55, oxide=0.62,
+         bands=((0.06, 0.54),)),
+    dict(w=420, h=570, scale=2, variants=3, folds=('v', 'h', 'v2'), stains=5, specks=True, ghost='table', curl=1.0, oxide=1.0,
+         bands=((0.24, 0.33), (0.62, 0.83))),
+    dict(w=46, h=30, scale=3, variants=2, folds=(), stains=0, specks=False, ghost='', curl=0.0, oxide=0.8,
+         bands=()),
 ]
 
 # 调色：新闻纸偏灰的米黄，不是奶油白；氧化到边缘变成脏褐
@@ -202,8 +207,8 @@ def water_stains(W, H, scale, rng, count):
         dr.polygon(pts, outline=int(rng.uniform(170, 230)), width=max(2, int(2.2 * scale)))
     inner = inner.filter(ImageFilter.GaussianBlur(4.5 * scale))
     rim = rim.filter(ImageFilter.GaussianBlur(1.6 * scale))
-    a = np.maximum(np.asarray(inner, np.float32) / 255.0 * 0.55,
-                   np.asarray(rim, np.float32) / 255.0 * 0.62)
+    a = np.maximum(np.asarray(inner, np.float32) / 255.0 * 0.62,
+                   np.asarray(rim, np.float32) / 255.0 * 0.80)
     return a[..., None]
 
 
@@ -228,14 +233,79 @@ def paper_fibers(W, H, scale, rng):
     layer = Image.new('L', (W, H), 0)
     d = ImageDraw.Draw(layer)
     count = int(60 * scale * (W * H) / (400.0 * 400.0) * 40)
-    for _ in range(max(6, min(count, 900))):
+    for _ in range(max(6, min(count, 1300))):
         x0, y0 = rng.uniform(0, W), rng.uniform(0, H)
-        ln = rng.uniform(1.5, 7.0) * scale
+        ln = rng.uniform(1.5, 8.0) * scale
         ang = rng.uniform(-0.35, 0.35)
         d.line([(x0, y0), (x0 + np.cos(ang) * ln, y0 + np.sin(ang) * ln)],
-               fill=int(rng.uniform(60, 130)), width=1)
+               fill=int(rng.uniform(60, 140)), width=1)
     a = np.asarray(layer.filter(ImageFilter.GaussianBlur(0.4 * scale)), np.float32) / 255.0
-    return (a[..., None] - 0.0) * 9.0  # 亮度加一点点
+    return (a[..., None] - 0.0) * 11.0  # 亮度加一点点
+
+
+def halftone(W, H, scale, rng):
+    """报纸的网点：旋转 15° 左右的点阵。幅度很小，但放大看就是印刷品而非纯色纸。
+    间距按 scale 定，缩到游戏里的显示尺寸后正好落在 3~5 像素，不会糊成一片。"""
+    pitch = rng.uniform(9.0, 13.0) * scale
+    ang = np.deg2rad(rng.uniform(12, 24))
+    ca, sa = float(np.cos(ang)), float(np.sin(ang))
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    u = (xx * ca + yy * sa) / pitch
+    v = (-xx * sa + yy * ca) / pitch
+    du = np.abs(u - np.round(u))
+    dv = np.abs(v - np.round(v))
+    dot = np.clip(1.0 - np.sqrt(du * du + dv * dv) / 0.46, 0.0, 1.0)
+    return ((dot - 0.32) * 5.5)[..., None]
+
+
+def surface_shade(W, H, scale, rng):
+    """纸面起伏：纸不是绝对平的，掠射光一打就有大块的明暗。低频、极轻，不抢字。"""
+    h1 = smooth_field(W, H, rng)
+    h2 = smooth_field(W, H, rng)
+    h = 0.65 * h1 + 0.35 * h2
+    gy, gx = np.gradient(h)
+    n = max(float(np.abs(gx).max()), float(np.abs(gy).max()), 1e-6)
+    shade = 1.0 + ((gx * 0.55 + gy * 0.85) / n) * 0.095
+    return np.clip(shade, 0.88, 1.12)[..., None]
+
+
+def crinkles(W, H, scale, rng):
+    """细褶纹：被揉过又摊平的纸，表面全是这种短弧。一亮一暗成对，才像折痕不像划痕。"""
+    dark = Image.new('L', (W, H), 0)
+    light = Image.new('L', (W, H), 0)
+    dd, dl = ImageDraw.Draw(dark), ImageDraw.Draw(light)
+    for _ in range(int(rng.integers(22, 40))):
+        x0, y0 = rng.uniform(0, W), rng.uniform(0, H)
+        ln = rng.uniform(0.18, 0.75) * max(W, H)
+        ang = rng.uniform(0, np.pi)
+        x1, y1 = x0 + np.cos(ang) * ln, y0 + np.sin(ang) * ln
+        mx = (x0 + x1) * 0.5 + rng.uniform(-0.18, 0.18) * ln
+        my = (y0 + y1) * 0.5 + rng.uniform(-0.18, 0.18) * ln
+        pts = [((1 - t / 8.0) ** 2 * x0 + 2 * (1 - t / 8.0) * (t / 8.0) * mx + (t / 8.0) ** 2 * x1,
+                (1 - t / 8.0) ** 2 * y0 + 2 * (1 - t / 8.0) * (t / 8.0) * my + (t / 8.0) ** 2 * y1)
+               for t in range(9)]
+        w = max(1, int(scale * 0.7))
+        dd.line(pts, fill=int(rng.uniform(90, 150)), width=w)
+        # 受光侧错开一点点
+        dl.line([(p[0] + 1.6 * scale, p[1] - 1.6 * scale) for p in pts],
+                fill=int(rng.uniform(70, 120)), width=w)
+    blur = 0.9 * scale
+    da = np.asarray(dark.filter(ImageFilter.GaussianBlur(blur)), np.float32) / 255.0
+    la = np.asarray(light.filter(ImageFilter.GaussianBlur(blur)), np.float32) / 255.0
+    return (1.0 - 0.15 * da + 0.11 * la)[..., None]
+
+
+def band_mask(W, H, scale, bands):
+    """文字行带：这些地方污渍减半，纸纹照样保留 —— 有质感，但不糊字。"""
+    if not bands:
+        return np.ones((H, W, 1), np.float32)
+    m = np.ones((H, W), np.float32)
+    for y0, y1 in bands:
+        a, b = int(max(0.0, y0) * H), int(min(1.0, y1) * H)
+        if b > a:
+            m[a:b, :] = 0.50
+    img = Image.fromarray((m * 255).astype(np.uint8))
+    return (np.asarray(img.filter(ImageFilter.GaussianBlur(2.0 * scale)), np.float32) / 255.0)[..., None]
 
 
 def apply_folds(rgb, W, H, scale, rng, folds):
@@ -383,6 +453,12 @@ def make_sheet(cfg, seed):
     shade = 1.0 + 0.075 * field + 0.011 * streak
     rgb = PAPER[None, None, :] * shade[..., None] + grain[..., None]
 
+    # 三层"纹理"：纸面起伏（大块明暗）→ 印刷网点（细密点阵）→ 揉过的细褶纹。
+    # 都是低对比，字压在上面照样清楚；但纸一下就不像一块纯色板了。
+    rgb *= surface_shade(W, H, scale, rng)
+    rgb += halftone(W, H, scale, rng)
+    rgb *= crinkles(W, H, scale, rng)
+
     # 大范围暖化：离纸心越远越黄褐，中心保持米黄
     t_body = near(dist, 0.50 * dmax) ** 1.2
     rgb = rgb * (1.0 - t_body[..., None] * 0.62) + PAPER_OUT[None, None, :] * t_body[..., None] * 0.62
@@ -396,11 +472,12 @@ def make_sheet(cfg, seed):
         g = ghost[..., None]
         rgb = rgb * (1.0 - g) + INK[None, None, :] * g
 
-    # ---- 水渍、油污
-    st = water_stains(W, H, scale, rng, int(cfg['stains']))
+    # ---- 水渍、油污（文字行带里减半：有痕迹，但不糊字）
+    bm = band_mask(W, H, scale, cfg.get('bands', ()))
+    st = water_stains(W, H, scale, rng, int(cfg['stains'])) * bm
     rgb = rgb * (1.0 - st) + STAIN[None, None, :] * st
     if cfg['specks']:
-        sp = oil_specks(W, H, scale, rng)
+        sp = oil_specks(W, H, scale, rng) * bm
         rgb = rgb * (1.0 - sp) + GRIME[None, None, :] * sp
 
     # ---- 纸纤维
