@@ -412,7 +412,8 @@ func _calls_click(point: Vector2) -> void:
 		return
 	for i in range(mini(calls_seq.size(), CALL_SLOTS.size())):
 		var c: Vector2 = CALL_SLOTS[i]
-		if Vector2(c.x, c.y).distance_to(point) <= CALL_RADIUS and not calls_done[i]:
+		# 电话跳起来时点击判定跟着跳：照着当前腾空位置算，否则跳起来就点不中
+		if (c + _call_offset(i, not calls_done[i])).distance_to(point) <= CALL_RADIUS + 10.0 and not calls_done[i]:
 			_calls_pick(i)
 			return
 
@@ -615,6 +616,55 @@ func _draw_dice() -> void:
 					p.text_center(line, cx, 530, 20, Color("#ffe092") if dice_outcome == "win" else Color("#e7c98a"))
 					p.button(CONFIRM_RECT, "离开赌桌")
 
+func _call_ringing(i: int, dimmed: bool) -> bool:
+	if calls_state == "memo":
+		return calls_seq[mini(calls_memo_i, maxi(0, calls_seq.size() - 1))] == i
+	if calls_state == "play":
+		return not dimmed # 限时阶段：没挂的都在响
+	return false
+
+
+func _call_offset(i: int, ringing: bool) -> Vector2:
+	if not ringing:
+		return Vector2.ZERO
+	var ph: float = main.elapsed * 9.0 + float(i) * 1.3
+	return Vector2(sin(main.elapsed * 42.0 + float(i) * 1.7) * 2.0, -absf(sin(ph)) * 20.0)
+
+
+func _draw_call_phone(p, base: Vector2, num: int, ringing: bool, done: bool) -> void:
+	## 一台真正的老式转盘电话机。响铃时整台跳起来：起跳拉长、落地压扁（卡通跳法），
+	## 挂断后听筒搁在一旁、机身变暗 —— 一眼能读出"哪些还没挂"。
+	var ph: float = main.elapsed * 9.0 + float(num - 1) * 1.3
+	var hop: float = absf(sin(ph)) * 20.0 if ringing else 0.0
+	var st: float = 0.12 * sin(ph) if ringing else 0.0 # 拉长(+) / 压扁(-)
+	var cc: Vector2 = base + _call_offset(num - 1, ringing)
+	# 影子留在地上：跳得越高影子越小
+	var sh_rx: float = 52.0 * (1.0 - 0.45 * hop / 20.0)
+	_ellipse(p, base + Vector2(0, 5), sh_rx, 9.0, Color(0.05, 0.03, 0.02, 0.4))
+	var body := Color("#4a3524") if not done else Color("#33271b")
+	var face := Color("#5a4128") if not done else Color("#3d2e20")
+	var dark := Color("#2e2118") if not done else Color("#221a12")
+	var brass := Color("#8a6a42") if not done else Color("#5a4a34")
+	# 以落点为原点缩放：跳起时拉长、落地压扁
+	p.draw_set_transform_matrix(Transform2D(0.0, cc) * Transform2D(0.0, Vector2(1.0 - st * 0.6, 1.0 + st)))
+	p.panel(Rect2(-46, -26, 92, 30), body, 10) # 机座
+	p.panel(Rect2(-38, -34, 76, 14), face, 7) # 顶面
+	p.draw_circle(Vector2(0, -13), 10.5, dark) # 拨号盘
+	p.draw_arc(Vector2(0, -13), 10.5, 0.0, TAU, 24, brass, 1.6)
+	for k in range(6):
+		var a := -PI * 0.85 + PI * 0.7 * (float(k) / 5.0)
+		p.draw_circle(Vector2(0, -13) + Vector2(cos(a), sin(a)) * 6.2, 1.7, brass)
+	p.panel(Rect2(-42, -22, 22, 13), Color("#1c130b"), 4) # 号码铜牌
+	p.text_center(str(num), -31, -12.5, 11, Color("#ffe092") if not done else Color("#554636"))
+	if done:
+		_draw_handset(p, Vector2(66, -2), 18, dark) # 挂断：听筒搁在旁边地上
+	else:
+		_draw_handset(p, Vector2(0, -44), 20, Color("#543823"))
+		if ringing:
+			var lit := 0.55 + 0.4 * sin(main.elapsed * 10.0)
+			p.draw_circle(Vector2(-38, -40), 4.0, Color(0.9, 0.32, 0.25, lit)) # 呼叫红灯
+	p.draw_set_transform_matrix(Transform2D())
+
 func _draw_calls() -> void:
 	var p = main
 	var round_label := "第 " + str(calls_round) + " 波"
@@ -629,24 +679,13 @@ func _draw_calls() -> void:
 		var c: Vector2 = CALL_SLOTS[i]
 		var num := i + 1
 		var dimmed: bool = calls_state == "play" and calls_done[i]
-		var ringing: bool = calls_state == "memo" and calls_seq[calls_memo_i] == i
-		var ring := Color("#ffe092")
-		if calls_state == "play" and not dimmed:
-			ring = Color("#e0503f")
-		elif not ringing:
-			ring = Color("#5a5148") if not dimmed else Color("#3a332c")
-		# 正在响的那枚左右发抖：来电是会震的
-		var cc := c + (Vector2(sin(main.elapsed * 42.0 + float(i) * 1.7) * 3.5, 0) if ringing else Vector2.ZERO)
-		p.draw_circle(cc, CALL_RADIUS + 6.0, Color(0.09, 0.06, 0.04, 0.85))
-		p.draw_arc(cc, CALL_RADIUS + 6.0, 0.0, TAU, 40, ring, 2.5)
-		p.draw_circle(cc, CALL_RADIUS, Color("#241a10") if not dimmed else Color("#1a140c"))
-		# 听筒图标：一眼看懂"这是来电"，不是六个抽象圆圈
-		_draw_handset(p, cc + Vector2(0, -12), 19, Color("#efbc72") if not dimmed else Color("#554636"))
-		p.text_center(str(num), cc.x, cc.y + 26, 18, Color("#efbc72") if not dimmed else Color("#554636"))
-		# 响铃动画：记忆阶段高亮气泡时画一圈扩散的波
-		if ringing:
-			var wave := 6.0 + 10.0 * (1.0 - calls_t / maxf(0.01, float(CALL_MEMO[mini(calls_round - 1, CALL_MEMO.size() - 1)]) / float(calls_seq.size())))
-			p.draw_arc(cc, CALL_RADIUS + wave, 0.0, TAU, 32, Color(1.0, 0.87, 0.57, 0.4), 2.0)
+		var ringing: bool = _call_ringing(i, dimmed)
+		_draw_call_phone(p, c, num, ringing, dimmed)
+		if ringing: # 响铃动画：两圈错相的扩散波，从机身上滚出去
+			for k in range(2):
+				var wave: float = fmod(main.elapsed * 30.0 + 17.0 * float(k), 34.0)
+				p.draw_arc(c + Vector2(0, -14), 52.0 + wave, 0.0, TAU, 32,
+					Color(1.0, 0.87, 0.57, 0.38 * (1.0 - wave / 34.0)), 2.0)
 	# 桌角的老式电话机：一切骚扰的源头——通话时机身发抖、红灯闪
 	_draw_phone(p, Vector2(640, 616))
 	if calls_state == "play": # 限时阶段：整块面板边缘红光脉动
