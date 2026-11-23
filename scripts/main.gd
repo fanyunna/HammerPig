@@ -2524,6 +2524,37 @@ func text_center(value: String, center_x: float, y: float, size: int, color := C
 	var width := font.get_string_size(value, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
 	text_at(value, Vector2(center_x - width / 2, y), size, color)
 
+
+## 装不下的长行：从给定字号往下缩，直到塞进 max_w 为止（下限 10）
+func text_fit_center(value: String, center_x: float, y: float, size: int, max_w: float, color := Color("#f4e0b8")) -> void:
+	var s := size
+	while s > 10 and font.get_string_size(value, HORIZONTAL_ALIGNMENT_LEFT, -1, s).x > max_w:
+		s -= 1
+	text_center(value, center_x, y, s, color)
+
+
+## 更长的句子：贪心折成多行居中画（折不动再靠 text_fit 缩），返回行数
+func text_wrap_center(value: String, center_x: float, y: float, size: int, max_w: float, color := Color("#f4e0b8")) -> int:
+	if font.get_string_size(value, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x <= max_w:
+		text_center(value, center_x, y, size, color)
+		return 1
+	var lines: Array[String] = []
+	var cur := ""
+	for ch in value.split(""):
+		var test := cur + ch
+		if cur != "" and font.get_string_size(test, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x > max_w:
+			lines.append(cur)
+			cur = ch.lstrip(" ")
+		else:
+			cur = test
+	if cur != "":
+		lines.append(cur)
+	var lh := size + 9
+	var y0 := y - float(lines.size() - 1) * lh * 0.5
+	for i in range(lines.size()):
+		text_center(lines[i], center_x, y0 + float(i) * lh, size, color)
+	return lines.size()
+
 func panel(rect: Rect2, color: Color, radius := 18, border := 0, border_color := Color.TRANSPARENT) -> void:
 	var style := StyleBoxFlat.new()
 	style.bg_color = color
@@ -3777,20 +3808,20 @@ func draw_heart(pos: Vector2) -> void:
 	draw_colored_polygon(PackedVector2Array([pos + Vector2(-8, 0), pos + Vector2(8, 0), pos + Vector2(0, 10)]), Color("#e7a6a4"))
 
 func draw_finished() -> void:
-	panel(Rect2(385, 270, 510, 375), Color("#2a475e"), 25)
+	panel(Rect2(355, 268, 570, 380), Color("#2a475e"), 25)
 	if end_reason == "exhausted":
 		text_center("体力耗尽！", 640, 345, 36, Color("#efbc72"))
-		text_center(story_line("exhausted_line", "手停下来了。账单还在桌上。"), 640, 400, 22)
+		text_wrap_center(story_line("exhausted_line", "手停下来了。账单还在桌上。"), 640, 400, 22, 520)
 	elif end_reason == "coin": # 靠抛硬币翻上去的：赢了，但是赢在运气上
 		text_center("正面。", 640, 345, 36, Color("#ffe092"))
-		text_center(story_line("win_coin_line", "一把就到手了 —— 你不会觉得这是运气，你会觉得自己有手感。"), 640, 400, 22)
+		text_wrap_center(story_line("win_coin_line", "一把就到手了 —— 你不会觉得这是运气，你会觉得自己有手感。"), 640, 400, 22, 520)
 	else:
 		text_center(story_line("win_title", "暂时安全"), 640, 345, 36, Color("#a4d007"))
-		text_center(story_line("win_line", "目标达成，你甩开了催债电话 —— 但桌上那叠账单，一张都没少。"), 640, 400, 22)
+		text_wrap_center(story_line("win_line", "目标达成，你甩开了催债电话 —— 但桌上那叠账单，一张都没少。"), 640, 400, 22, 520)
 	text_center("余额 ¥" + str(score) + "    敲碎 " + str(broken) + " 只", 640, 452, 26, Color("#efbc72"))
-	text_center("已还 " + str(paid_count) + " 张 · 还剩 " + str(bills.size()) + " 张（¥" + str(bills_total()) + "）", 640, 492, 20, Color("#c9b08a"))
-	text_center(highlight_line(), 640, 524, 17, Color("#ffe092"))
-	text_center("永久成长：" + meta_unlock_summary() + "　·　碎片 " + str(meta_shards), 640, 550, 15, Color("#efbc72"))
+	text_fit_center("已还 " + str(paid_count) + " 张 · 还剩 " + str(bills.size()) + " 张（¥" + str(bills_total()) + "）", 640, 492, 20, 520, Color("#c9b08a"))
+	text_fit_center(highlight_line(), 640, 524, 17, 520, Color("#ffe092"))
+	text_fit_center("永久成长：" + meta_unlock_summary() + "　·　碎片 " + str(meta_shards), 640, 550, 15, 520, Color("#efbc72"))
 	button(LEGACY_SHOP_RECT, "传承商店")
 	button(CONTINUE_RECT, "再来一轮")
 
@@ -3840,12 +3871,12 @@ func legacy_shop_click(p: Vector2) -> void:
 
 
 func draw_bankrupt() -> void:
-	panel(Rect2(385, 270, 510, 375), Color("#3a2424"), 25)
+	panel(Rect2(355, 268, 570, 380), Color("#3a2424"), 25)
 	text_center(story_line("lose_title", "破产了"), 640, 345, 36, Color("#e7a6a4"))
-	text_center(story_line("lose_line", "敲碎 {broken} 只存钱罐，账单反而又多了几张。"), 640, 400, 22)
+	text_wrap_center(story_line("lose_line", "敲碎 {broken} 只存钱罐，账单反而又多了几张。"), 640, 400, 22, 520)
 	text_center("余额 ¥" + str(score) + "    敲碎 " + str(broken) + " 只", 640, 452, 26, Color("#efbc72"))
-	text_center("已还 " + str(paid_count) + " 张 · 还剩 " + str(bills.size()) + " 张（¥" + str(bills_total()) + "）", 640, 492, 20, Color("#c9b08a"))
-	text_center(highlight_line(), 640, 524, 17, Color("#ffe092"))
-	text_center("永久成长：" + meta_unlock_summary() + "　·　碎片 " + str(meta_shards), 640, 550, 15, Color("#efbc72"))
+	text_fit_center("已还 " + str(paid_count) + " 张 · 还剩 " + str(bills.size()) + " 张（¥" + str(bills_total()) + "）", 640, 492, 20, 520, Color("#c9b08a"))
+	text_fit_center(highlight_line(), 640, 524, 17, 520, Color("#ffe092"))
+	text_fit_center("永久成长：" + meta_unlock_summary() + "　·　碎片 " + str(meta_shards), 640, 550, 15, 520, Color("#efbc72"))
 	button(LEGACY_SHOP_RECT, "传承商店")
 	button(CONTINUE_RECT, "再来一轮")
