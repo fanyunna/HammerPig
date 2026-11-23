@@ -910,6 +910,8 @@ func run() -> void:
     # 到期不再默默盖章，而是先给一次「凑钱 / 躲催债」的机会。
     key_press(KEY_R)
     game.bill_data["challenge_max_per_run"] = 3
+    game.bill_data["challenge_warning_seconds"] = 0.0 # 老断言按"立即开考"写：预告关掉
+    game.bill_data["challenge_rest_seconds"] = 0.0
     game.next_card = 999999
     game.gamble_used = true
     game.settings["pig_types"] = []
@@ -974,6 +976,46 @@ func run() -> void:
     game._process(0.016)
     check(game.phase == "playing" and game.pending_challenge.is_empty(),
         "no more challenges once the per-run cap is reached")
+    game.bill_data["challenge_max_per_run"] = 0
+
+    # ================= A2：考核预告与喘息冷却 =================
+    # 挂起后不再立即开考：先亮预告横幅倒计时；考核结束有喘息；喘息/让出机会期间到期票推迟不盖章。
+    key_press(KEY_R)
+    game.bill_data["challenge_max_per_run"] = 3
+    game.bill_data["challenge_warning_seconds"] = 3.0
+    game.bill_data["challenge_rest_seconds"] = 6.0
+    game.next_card = 999999
+    game.gamble_used = true
+    game.settings["pig_types"] = []
+    game.challenge_count = 0
+    game.pending_challenge = {}
+    game.score = 800
+    # 两张账单同一天到期：一张拿考核机会（先亮预告），另一张不当场盖逾期章
+    game.bills[0]["due_day"] = game.game_day
+    game.bills[1]["due_day"] = game.game_day
+    game.earned_total = income_day * 2.0
+    game._process(0.016)
+    check(game.phase == "playing" and not game.pending_challenge.is_empty(),
+        "a due bill schedules a warning instead of jumping straight into the challenge")
+    check(game.challenge_warn_t > 0.0, "the challenge warning shows a visible countdown")
+    check(not bool(game.bills[1].get("overdue", false)),
+        "a second bill due in the same calendar jump is deferred, not stamped")
+    game._process(4.0) # 预告走完
+    check(game.phase == "challenge", "the challenge starts once the warning expires")
+    game.finish_challenge(true) # 赢了免单：进入喘息期
+    check(game.challenge_rest_t > 0.0, "a finished challenge grants a breathing cooldown")
+    # 喘息期内另一张票仍挂着到期：不挂新考核、也不盖逾期章
+    game.earned_total += income_day
+    game._process(0.016)
+    check(game.phase == "playing" and game.pending_challenge.is_empty(),
+        "no new challenge is scheduled during the breathing cooldown")
+    check(not bool(game.bills[1].get("overdue", false)),
+        "bills falling due during the cooldown are deferred, not stamped")
+    game.challenge_rest_t = 0.0 # 冷却结束：下次日历推进时它拿到机会
+    game.earned_total += income_day
+    game._process(0.016)
+    check(not game.pending_challenge.is_empty(),
+        "the deferred bill gets its own chance once the cooldown is over")
     game.bill_data["challenge_max_per_run"] = 0
 
     # ================= B：代价型构筑卡 =================

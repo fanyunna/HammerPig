@@ -93,6 +93,8 @@ var charge_pig := -1 # 按下那一刻瞄准的猪（松手时它没跑远就还
 var pending_strike: Dictionary = {} # 冷却期间按下的那一锤：冷却一结束立刻补上，不静默丢点击
 var pending_t := 0.0
 var pending_challenge: Dictionary = {} # 日历刚撞到期、等这一帧收尾就弹的账单考核
+var challenge_warn_t := 0.0 # 考核预告倒计时：挂起后先亮横幅，归零才开考 —— 别在小游戏一结束就突袭
+var challenge_rest_t := 0.0 # 喘息冷却：考核刚结束的几秒里不再挂新考核，也不把到期票盖成逾期
 var challenge_count := 0 # 本局已触发的账单考核次数（上限见 bills.json 的 challenge_max_per_run）
 var challenge_bill_tag := "" # 本次考核绑定的账单编号；空 = 不绑账单（老式通用考核）
 var challenge_label := "" # 考核面板上那句"谁到期了、多少钱"
@@ -360,6 +362,7 @@ func advance_calendar() -> void:
 	var income_per_day := maxf(1.0, float(bill_data.get("income_per_game_day", 30)))
 	var target_day := 1 + int(earned_total / income_per_day)
 	var challenge_cap := int(bill_data.get("challenge_max_per_run", 3))
+	var gave_chance := false # 这一次推进里已经给过一张票考核机会了（大额收入常一次跨好几天）
 	while game_day < target_day:
 		game_day += 1
 		for i in range(bills.size()):
@@ -369,12 +372,20 @@ func advance_calendar() -> void:
 			# 到期不再是"默默盖个章"：先给一次催缴考核，这是整局里唯一会打断砸猪节奏的事。
 			# 一局最多 challenge_cap 次 —— 再多就成了频繁打断，反而更烦。
 			var bill_tag := String(BillManagerScript.tag_of(bill))
-			if phase == "playing" and pending_challenge.is_empty() \
-					and challenge_count < challenge_cap and not bill_tag.is_empty():
+			var can_offer := phase == "playing" and challenge_rest_t <= 0.0 \
+				and pending_challenge.is_empty() and challenge_count < challenge_cap \
+				and not bill_tag.is_empty()
+			if can_offer:
 				pending_challenge = {"tag": bill_tag,
 					"kind": "dodge" if int(bill.amount) >= 300 else "collect"}
 				challenge_count += 1
+				challenge_warn_t = float(bill_data.get("challenge_warning_seconds", 3.0))
+				gave_chance = true
 				continue # 先别判逾期：玩家还有一次机会
+			# 轮不上它的情况：喘息冷却没过、这次推进机会已经给出去、或根本不在游玩态。
+			# 前两种不当场盖逾期章 —— 等下次日历推进再给机会；只有"非游玩态撞到期"才直接盖。
+			if gave_chance or (phase == "playing" and challenge_rest_t > 0.0):
+				continue
 			mark_bill_overdue(bill)
 	if bills.size() > 0:
 		bills_fx.sync(bills)
@@ -1028,6 +1039,8 @@ func reset_game() -> void:
 	pending_strike = {}
 	pending_t = 0.0
 	pending_challenge = {}
+	challenge_warn_t = 0.0
+	challenge_rest_t = 0.0
 	challenge_count = 0
 	challenge_bill_tag = ""
 	challenge_label = ""
@@ -1140,11 +1153,15 @@ func _process(delta: float) -> void:
 	if score > last_observed_score: # 累计每笔新增收入；还账扣款不会倒扣进度
 		earned_total += score - last_observed_score
 	last_observed_score = score
+	challenge_rest_t = maxf(0.0, challenge_rest_t - delta) # 考核后的喘息冷却只在游玩态走表
 	advance_calendar()
 	if not pending_challenge.is_empty() and phase == "playing":
-		start_bill_challenge()
-		queue_redraw()
-		return
+		if challenge_warn_t > 0.0: # 预告期：横幅倒计时亮着，玩家照常砸猪，归零才进考核
+			challenge_warn_t = maxf(0.0, challenge_warn_t - delta)
+		if challenge_warn_t <= 0.0: # 同帧清零同帧开考：大步长（补帧/测试跳帧）也不拖一拍
+			start_bill_challenge()
+			queue_redraw()
+			return
 	if phase == "playing": # 结束了就不再催收
 		bills_fx.update_collection(delta, float(earned_total))
 	if update_gamble(delta): # 抛硬币翻面/落定时整局暂停：猪不走、卡不计时
@@ -2137,6 +2154,7 @@ func start_bill_challenge() -> void:
 	challenge_bill_tag = String(pending_challenge.get("tag", ""))
 	var kind := String(pending_challenge.get("kind", "collect"))
 	pending_challenge = {}
+	challenge_warn_t = 0.0 # 开考即消费掉预告
 	card_type = kind
 	# 记住是哪张账单在催：玩家的第一反应一定是"谁到期了、多少钱"
 	challenge_label = ""
@@ -2184,6 +2202,7 @@ func start_challenge() -> void:
 		escape.start() # 夺门而出：开场演出后进入双车道跑酷
 
 func finish_challenge(success: bool) -> void:
+	challenge_rest_t = float(bill_data.get("challenge_rest_seconds", 6.0)) # 喘息几秒：别背靠背连考，也别刚打完就突袭下一张
 	coins.clear()
 	dodgers.clear()
 	var bound_tag := challenge_bill_tag
@@ -2664,6 +2683,25 @@ func _draw_bulb_vector(tip: Vector2, b: float) -> void:
 		draw_line(Vector2(633, 66 + i * 4), Vector2(647, 66 + i * 4), Color("#5e4526"), 1.5)
 	draw_rect(Rect2(629, 78, 22, 3), Color("#5e4526"))
 
+## 考核预告横幅：日历撞到账单到期后先亮出「谁到期了 + 倒计时」，
+## 给玩家喘口气、看清要来的是什么 —— 别在某个小游戏一结束就被突然拽进考核。
+func draw_challenge_warning() -> void:
+	if pending_challenge.is_empty() or challenge_warn_t <= 0.0 or phase != "playing":
+		return
+	var bill_name := "账单"
+	for bill in bills:
+		if String(BillManagerScript.tag_of(bill)) == String(pending_challenge.get("tag", "")):
+			bill_name = String(bill.get("name", "账单"))
+			break
+	var kind := String(pending_challenge.get("kind", "collect"))
+	var label := bill_name + " 到期 · " + ("躲催债考核 " if kind == "dodge" else "凑钱考核 ") \
+		+ str(int(ceilf(challenge_warn_t))) + "s"
+	var pulse := 0.72 + 0.28 * sin(elapsed * 9.0) # 红边呼吸：不刺眼但不可能没看见
+	# 挂在 HUD 条下方（y≈190）：压不到体力/悬赏令，也不与连击字打架（考核要来时它让位）
+	panel(Rect2(640 - 210, 190, 420, 42), Color("#3a1410"), 12)
+	draw_rect(Rect2(640 - 210, 190, 420, 42), Color(0.88, 0.24, 0.12, 0.5 * pulse), false, 2)
+	text_center(label, 640, 217, 19, Color("#ff9a76"))
+
 ## 暗角贴图：中心透明、越靠边越黑，开局生成一次。
 ## 用贴图而不是叠十几层矩形，一帧就两次 draw，加再多猪也不心疼。
 func _make_vignette() -> ImageTexture:
@@ -2934,6 +2972,7 @@ func _draw() -> void:
 	draw_collection_flash() # 催收警告：只在屏幕边缘画一圈，不挡任何操作
 	draw_gamble_flip() # 抛硬币的翻面/落定动画，永远盖在最上层
 	draw_blackout() # 电费未缴：灯泡闪烁、房间随它忽明忽暗
+	draw_challenge_warning() # 考核预告横幅：压在暗化之上，断电时也看得见"考核要来了"
 	draw_bulb() # 灯泡永远画在暗化之上：它是光源，不该被自己造成的暗压住
 	if help_open:
 		draw_rect(Rect2(0, 0, 1280, 800), Color(0, 0, 0, 0.75))
