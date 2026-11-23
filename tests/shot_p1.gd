@@ -64,27 +64,26 @@ func run() -> void:
 	game.bill_open = true
 	await snap("tmp_p1_ledger.png")
 
-	# 账单到期考核：3D 舞台（凑钱）—— 金币落定后悬停一枚，看高亮与币面
+	# 账单到期考核：摆钱凑整（三张路子卡 + 桌上那沓钱 + 轮次倒计时）
 	game.bill_open = false
 	game.phase = "playing"
-	print("STEP challenge")
+	print("STEP collect")
 	game.card_type = "collect"
-	game.bill_amount = 80
-	game.bill_timer = 38.0
+	game.bill_amount = 50
 	game.start_challenge()
-	game.challenge_label = "房租 ¥560"
-	game.bill_timer = 38.0
-	game.collected = 35
-	game.coins.clear()
-	var coin_spots := [Vector2(300, 380), Vector2(520, 500), Vector2(700, 360), Vector2(880, 530), Vector2(1040, 410)]
-	for i in range(coin_spots.size()):
-		game.coin_uid += 1
-		game.coins.append({"position": coin_spots[i], "velocity": Vector2.ZERO, "value": 5,
-			"fake": i == 3, "life": 9.0, "vcid": game.coin_uid})
-	Input.warp_mouse(Vector2(700, 372)) # 停在一枚金币上：看悬停高亮
-	for i in range(45):
-		game.challenge3d._process(0.04) # 快进物理，让金币落到台面上
-	await snap("tmp_p1_challenge.png")
+	game.challenge_label = "房租 ¥50"
+	game.collected = 15
+	game.bill_timer = 8.4
+	Input.warp_mouse(Vector2(640, 500))
+	await snap("tmp_p1_collect.png")
+
+	# 选了一张：卡面抬起高亮、飘字飞出来（顺手看钱堆变厚）
+	game.collected = 33
+	game.collect_picked = 1
+	game.collect_pick_t = 0.4
+	await snap("tmp_p1_collect_pick.png")
+	game.collect_picked = -1
+	game.collect_pick_t = 0.0
 
 	# 躲催债：逃跑场面（开场演出 + 鼠标自由上下跑）
 	print("STEP dodge")
@@ -107,11 +106,11 @@ func run() -> void:
 	print("STEP fallback")
 	var saved_3d = game.challenge3d
 	game.challenge3d = null
-	await snap("tmp_p1_challenge_2d.png")
+	await snap("tmp_p1_collect_2d.png")
 	game.challenge3d = saved_3d
 
-	# 悬赏板：普通态 + 确认态（黄框脉冲 + "再点一次开打"）
-	print("STEP bounty")
+	# 催收预警板：正常态（还有多远上门 / 还能来几次）
+	print("STEP board")
 	game.phase = "playing"
 	game.reset_game()
 	await process_frame
@@ -120,11 +119,7 @@ func run() -> void:
 	game.score = 420
 	game.stamina = 190.0
 	Input.warp_mouse(Vector2(640, 500))
-	await snap("tmp_p1_bounty.png")
-	game.bounty_armed = true
-	game.bounty_arm_t = 3.0 # 确认倒计时也要一起给，否则下一帧就被 _process 收回
-	await snap("tmp_p1_bounty_armed.png")
-	game.bounty_armed = false
+	await snap("tmp_p1_board.png")
 
 	# 天数里程碑小游戏：当铺 / 赌桌 / 电话
 	print("STEP day events")

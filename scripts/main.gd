@@ -34,6 +34,10 @@ const DESK_RECT := Rect2(110, 260, 1060, 396) # 桌面外框的屏幕矩形（3D
 ## 舞台矩形同时是：3D 视口的像素尺寸、2D 回退的绘制区、金币与催债人的活动边界。
 const CHALLENGE_PANEL := Rect2(40, 118, 1200, 574)
 const CHALLENGE_STAGE := Rect2(56, 300, 1168, 372)
+## 摆钱凑整：三张路子横排在舞台里，卡面尺寸固定 —— 玩家第二次遇到就认得版式。
+const COLLECT_CARD_SIZE := Vector2(300, 268)
+const COLLECT_CARD_Y := 318.0
+const COLLECT_CARD_GAP := 44.0
 ## 按住左键蓄力：轻点是快锤（完全等于原来的手感），按满变成重锤 ——
 ## 收益 ×1.5、伤害 +1，但蓄力这半秒猪会跑，砸空还要额外付一次代价。
 const CHARGE_MAX := 0.55
@@ -141,9 +145,15 @@ var bill_amount := 30
 var bill_time := 10.0
 var bill_timer := 0.0
 var collected := 0
-var coins: Array[Dictionary] = []
-var coin_spawn_timer := 0.0
-var coin_uid := 0 # 金币的身份证号：3D 舞台靠它把"同一枚币"的动画串起来（每帧重算位置不等于重建）
+var coins: Array[Dictionary] = [] # 3D 舞台的硬币槽：凑钱关已改成"摆钱凑整"，这里恒为空
+# —— 摆钱凑整（凑钱关）：桌上摊 3 张「来钱路子」，选一张，钱进袋、代价也进账 ——
+var collect_cards: Array[Dictionary] = [] # 当前这一轮的三张路子（稳 / 中 / 猛）
+var collect_round := 1 # 第几轮
+var collect_rounds := 4 # 本关一共能给几次选择
+var collect_pick_t := 0.0 # 选中后的结算停顿：这半秒里不接受点击，卡面要抬起来
+var collect_picked := -1 # 刚选中的那张（高亮 + 其余变暗）
+var collect_debt := 0 # 本关为了凑钱多签下的账（结算小结用）
+var collect_pain := 0.0 # 本关为凑钱耗掉的力气（结算小结用）
 var double_timer := 0.0
 var wheel # 幸运转盘：独立子节点，低侵入，只读写 main 的公开状态
 var build # 卡片2.0：构筑/成长卡系统（合并版移植），低侵入
@@ -1069,7 +1079,12 @@ func reset_game() -> void:
 	bill_timer = 0.0
 	collected = 0
 	coins.clear()
-	coin_spawn_timer = 0.0
+	collect_cards.clear()
+	collect_round = 1
+	collect_pick_t = 0.0
+	collect_picked = -1
+	collect_debt = 0
+	collect_pain = 0.0
 	double_timer = 0.0
 	combo_count = 0
 	combo_timer = 0.0
@@ -1249,17 +1264,18 @@ func _process(delta: float) -> void:
 		if stamina < swing_stamina_cost():
 			end_round_exhausted()
 	elif phase == "challenge":
-		bill_timer -= delta
 		hammer_position = get_global_mouse_position()
 		if card_type == "collect":
-			update_collect(delta)
+			update_collect(delta) # 摆钱凑整：bill_timer 是"本轮倒计时"，由它自己推进
 		else:
+			bill_timer -= delta
 			escape.update(delta) # 逃跑场面：开场演出 + 双车道跑酷（十五轮）
 	# 3D 舞台：只在凑钱考核期间活着。逃跑场面是横版 2D 自绘，不走 3D 舞台。
 	if challenge3d != null:
 		if phase == "challenge" and card_type == "collect":
 			challenge3d.set_active(true)
-			challenge3d.sync(coins, dodgers, hammer_position, "collect", invincible_timer)
+			# mode 传空：柜台只当背景板，金色跟随圈收起来 —— 这关要读的是卡片，不是瞄硬币
+			challenge3d.sync(coins, dodgers, hammer_position, "", invincible_timer)
 		else:
 			challenge3d.set_active(false)
 	for i in range(particles.size() - 1, -1, -1):
@@ -1474,7 +1490,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				apply_card()
 		elif phase == "challenge":
 			if card_type == "collect":
-				click_coin(point)
+				click_collect(point) # 摆钱凑整：点哪张路子就选哪张
 			else:
 				escape.handle_click(point) # 逃跑场面：点上下半屏换道 / 跳过演出
 		elif phase == "finished" or phase == "bankrupt":
@@ -2164,11 +2180,15 @@ func clear_bill_by_tag(tag: String) -> bool:
 func start_challenge() -> void:
 	phase = "challenge"
 	bill_timer = bill_time
-	sync_cursor() # 凑钱小游戏需要系统箭头点硬币；躲债关是鼠标跟手，也留着箭头
+	sync_cursor() # 凑钱关要点桌面上的路子卡、躲债关是鼠标跟手，两种都留着系统箭头
 	if card_type == "collect":
 		collected = 0
+		collect_round = 1
+		collect_rounds = maxi(1, int(settings.get("collect_rounds", 4)))
+		collect_debt = 0
+		collect_pain = 0.0
 		coins.clear()
-		coin_spawn_timer = 0.0
+		collect_deal() # 直接摊牌：第一轮的三张路子就在桌上
 	else:
 		coins.clear() # 上一个凑钱关剩下的钱不许带进躲债关：舞台干净地开演
 		dodgers.clear()
@@ -2180,6 +2200,9 @@ func start_challenge() -> void:
 func finish_challenge(success: bool) -> void:
 	challenge_rest_t = float(bill_data.get("challenge_rest_seconds", 6.0)) # 喘息几秒：别背靠背连考，也别刚打完就突袭下一张
 	coins.clear()
+	collect_cards.clear()
+	collect_pick_t = 0.0
+	collect_picked = -1
 	dodgers.clear()
 	var bound_tag := challenge_bill_tag
 	challenge_bill_tag = ""
@@ -2246,59 +2269,143 @@ func finish_challenge(success: bool) -> void:
 	collected = 0
 	bill_timer = 0.0
 
-func spawn_coin() -> void:
-	var fake := randf() < float(settings.coin_fake_chance)
-	var value := -int(settings.coin_value) if fake else int(settings.coin_value)
-	var area := CHALLENGE_STAGE.grow(-44.0) # 别贴着台沿生成：金币要整枚落在光里
-	coin_uid += 1
-	coins.append({
-		"position": Vector2(randf_range(area.position.x, area.end.x), randf_range(area.position.y, area.end.y)),
-		"velocity": Vector2(randf_range(-140, 140), randf_range(-90, 90)),
-		"value": value, "fake": fake, "life": randf_range(2.2, 3.6),
-		"vcid": coin_uid, # 3D 舞台靠它认出"还是那枚币"，否则每帧都会被当成新生成的
-	})
+## ---------------------------------------------------------------- 摆钱凑整
+## 凑钱关的核心问题不是"手快"，而是"这笔钱你打算从哪儿抠出来"。
+## 桌上摊三张路子（稳 / 中 / 猛）：每张给一笔钱，代价也当场记上 ——
+## 力气（砸猪的本钱）、或者一张新账（把窟窿挪到以后还）。
+## 轮次有限、每轮还带倒计时：犹豫本身也是代价（这一轮就白过了）。
 
-func update_collect(delta: float) -> void:
-	coin_spawn_timer -= delta
-	if coin_spawn_timer <= 0.0:
-		spawn_coin()
-		coin_spawn_timer = float(settings.coin_spawn_interval)
-	for i in range(coins.size() - 1, -1, -1):
-		var c: Dictionary = coins[i]
-		c.position += c.velocity * delta
-		# 撞台沿就弹回来。以前金币可以飘出面板，在"看不见的地方"继续占着倒计时，
-		# 玩家只能干等 —— 现在它始终在光里弹着，一直有得点。
-		var b := CHALLENGE_STAGE.grow(-28.0)
-		var cp: Vector2 = c.position
-		var cv: Vector2 = c.velocity
-		if cp.x < b.position.x or cp.x > b.end.x:
-			cv.x = -cv.x
-			cp.x = clampf(cp.x, b.position.x, b.end.x)
-		if cp.y < b.position.y or cp.y > b.end.y:
-			cv.y = -cv.y
-			cp.y = clampf(cp.y, b.position.y, b.end.y)
-		c.position = cp
-		c.velocity = cv
-		c.life -= delta
-		if c.life <= 0.0:
-			coins.remove_at(i)
+## 三张卡在屏幕上的位置：居中横排，从左到右危险度递增（玩家第二次就认得版式）。
+func collect_card_rects() -> Array[Rect2]:
+	var out: Array[Rect2] = []
+	var n := collect_cards.size()
+	if n <= 0:
+		return out
+	var total := COLLECT_CARD_SIZE.x * float(n) + COLLECT_CARD_GAP * float(n - 1)
+	var x0 := 640.0 - total * 0.5
+	for i in range(n):
+		out.append(Rect2(x0 + float(i) * (COLLECT_CARD_SIZE.x + COLLECT_CARD_GAP),
+			COLLECT_CARD_Y, COLLECT_CARD_SIZE.x, COLLECT_CARD_SIZE.y))
+	return out
+
+## 卡面金额按账单大小等比缩放：¥50 的单子和 ¥200 的单子，走的是同一套价目表。
+func collect_gain(card: Dictionary) -> int:
+	var base := float(card.get("gain", 10.0))
+	return maxi(3, int(round(base * float(bill_amount) / 50.0)))
+
+## "你现在必须付多少"：剩余轮次平摊下来，这一轮至少得进多少 —— 用于保证牌面不坑人。
+func collect_need_now() -> int:
+	var left := maxi(1, collect_rounds - collect_round + 1)
+	return int(ceil(float(bill_amount - collected) / float(left)))
+
+func collect_round_seconds() -> float:
+	return maxf(3.0, float(settings.get("collect_round_seconds", 12.0)))
+
+## 发牌：稳/中/猛各一张（顺序固定 = 玩家一眼看懂风险梯度）。
+## 兜底规则：这一轮至少有一张"够用"的卡。否则玩家再会算也凑不够，
+## 那就不叫决策、叫抽卡 —— 凑钱关的乐趣必须是"选"，不能是"运气"。
+func collect_deal() -> void:
+	collect_cards.clear()
+	collect_picked = -1
+	collect_pick_t = 0.0
+	bill_timer = collect_round_seconds()
+	var buckets := {1: [], 2: [], 3: []}
+	var raw_pool: Variant = settings.get("collect_cards", [])
+	if raw_pool is Array:
+		for raw in raw_pool:
+			if raw is Dictionary:
+				var t := int(raw.get("tier", 2))
+				if buckets.has(t):
+					buckets[t].append(raw)
+	for t in [1, 2, 3]:
+		var pool: Array = buckets[t]
+		if pool.is_empty():
+			continue
+		collect_cards.append(Dictionary(pool[randi() % pool.size()]).duplicate(true))
+	if collect_cards.is_empty():
+		return
+	var need := collect_need_now()
+	var best := 0
+	for i in range(collect_cards.size()):
+		if collect_gain(collect_cards[i]) > collect_gain(collect_cards[best]):
+			best = i
+	if collect_gain(collect_cards[best]) < need:
+		# 反算回基准值（gain 会按账单大小缩放），让这张卡的实付金额刚好够
+		collect_cards[best]["gain"] = float(need) * 50.0 / float(maxi(1, bill_amount))
+
+## 选一张：钱进袋 → 代价立刻生效 → 停顿半秒（卡抬起来、飘字）→ 结算/发下一轮。
+func collect_pick(index: int) -> void:
+	if collect_pick_t > 0.0 or collect_picked >= 0:
+		return
+	if index < 0 or index >= collect_cards.size():
+		return
+	var card: Dictionary = collect_cards[index]
+	var gain := collect_gain(card)
+	collected += gain
+	collect_picked = index
+	collect_pick_t = 0.55
+	var rect: Rect2 = collect_card_rects()[index]
+	popups.append({"position": rect.get_center() + Vector2(0, -18), "life": 1.0, "text": "+¥" + str(gain)})
+	Sound.play("cash", 1.0 + 0.04 * float(mini(collect_round, 4)), 0.6)
+	var cost_text := collect_apply_cost(card)
+	if cost_text != "":
+		popups.append({"position": rect.get_center() + Vector2(0, 26), "life": 1.3, "text": cost_text})
+	Sound.play("click", 0.9)
+
+## 代价结算。返回飘字用的说明（空字符串 = 这张卡没代价）。
+func collect_apply_cost(card: Dictionary) -> String:
+	var kind := String(card.get("cost", "none"))
+	if kind == "stamina":
+		var drain := float(card.get("cost_value", 0.0))
+		stamina = maxf(6.0, stamina - drain) # 留一口气：凑钱把自己凑晕就没意思了
+		stamina_flash = 0.6
+		collect_pain += drain
+		return "力气 -" + str(int(drain))
+	if kind == "bill":
+		var amount := maxi(5, int(round(float(bill_amount) * float(card.get("cost_ratio", 0.4)))))
+		bills.append({"name": String(card.get("debt_name", "欠条")), "amount": amount,
+			"id": "iou", "no": str(9000 + randi() % 900),
+			"due": format_game_date(game_day + 2), "due_day": game_day + 2})
+		collect_debt += 1
+		sort_bills()
+		bills_fx.sync(bills)
+		return "多一张 ¥" + str(amount) + " 的账"
+	return ""
+
+## 一轮走完：够了就兑现，轮次用尽还不齐就逾期，否则发下一轮。
+func collect_advance() -> void:
+	collect_pick_t = 0.0
 	if collected >= bill_amount:
 		finish_challenge(true)
-	elif bill_timer <= 0.0:
+		return
+	if collect_round >= collect_rounds:
 		finish_challenge(false)
+		return
+	collect_round += 1
+	collect_deal()
 
-func click_coin(point: Vector2) -> void:
-	for i in range(coins.size() - 1, -1, -1):
-		var c: Dictionary = coins[i]
-		var cp: Vector2 = c.position
-		if point.distance_squared_to(cp) <= 26.0 * 26.0:
-			collected += int(c.value)
-			var v := int(c.value)
-			Sound.play("cash", 1.0 + float(clampi(collected, 0, 10)) * 0.03, 0.55) # 越捡越急，音高一点点往上爬
-			popups.append({"position": cp + Vector2(0, -20), "life": 0.8,
-				"text": ("+¥" + str(v) if v > 0 else "假币 -¥" + str(-v))})
-			coins.remove_at(i)
-			break
+func update_collect(delta: float) -> void:
+	if collect_pick_t > 0.0: # 结算停顿：卡抬起来、飘字飞出去，这半秒不接受新点击
+		collect_pick_t -= delta
+		if collect_pick_t <= 0.0:
+			collect_advance()
+		return
+	bill_timer -= delta
+	if bill_timer <= 0.0: # 房东在门外砸门：你犹豫的这几秒，路子全凉了
+		bill_timer = 0.0
+		popups.append({"position": Vector2(640, 500), "life": 1.4, "text": "犹豫太久 · 这一轮白过"})
+		Sound.play("stamp", 0.7)
+		collect_pick_t = 0.45
+
+## 点击：落在哪张卡上就选哪张。卡外的点击什么都不做（凑钱关没有"挥空"这回事）。
+func click_collect(point: Vector2) -> void:
+	if collect_pick_t > 0.0:
+		return
+	var rects := collect_card_rects()
+	for i in range(rects.size()):
+		if rects[i].has_point(point):
+			collect_pick(i)
+			return
 
 ## 存钱罐碎了：里面攒的钱撒出来，罐子的陶片四溅。
 ## 金币数量跟着面额走（金猪一把钱，青猪叮当两声），陶片数量固定 —— 一眼就知道这一锤值不值。
@@ -2917,8 +3024,9 @@ func _draw() -> void:
 		draw_set_transform(pp, float(p.get("spin", 0.0)) * 0.6, Vector2.ONE)
 		draw_colored_polygon(PackedVector2Array([Vector2(-5, -3), Vector2(4, -4), Vector2(5, 3), Vector2(-4, 4)]), color)
 		draw_set_transform(Vector2.ZERO)
-	for p in popups:
-		text_at(p.text, p.position, int(p.get("size", 28)), p.get("color", Color("#ffe092")))
+	# 凑钱关的飘字（+¥18 / 多一张账）要盖在卡面之上，所以那一关留到最后由 draw_collect 自己画。
+	if not (phase == "challenge" and card_type == "collect"):
+		draw_popups()
 	build.draw_effects(self) # 卡片2.0：连锁/爆破的闪电连线
 	panel(Rect2(0, 664, 1280, 136), Color(0.06, 0.09, 0.09, 0.24), 0) # 3D 桌面是暖色，底部说明要压一条暗底才看得清
 	if phase == "playing":
@@ -3344,9 +3452,10 @@ func draw_card() -> void:
 		text_center("敲猪收益翻倍", 640, 504, 19, Color("#c7d5e0"))
 	elif card_type == "collect":
 		card_badge(accent, "¥" + str(bill_amount), 32)
-		text_center("限时 " + str(int(bill_time)) + " 秒凑齐", 640, 464, 18, Color("#c7d5e0"))
-		text_center("限时凑钱小游戏", 640, 486, 18, Color("#c9b08a"))
-		text_center("凑不够就扣 ¥" + str(bill_amount), 640, 508, 16, Color("#e7a6a4"))
+		text_center(str(int(settings.get("collect_rounds", 4))) + " 轮 · 每轮 "
+			+ str(int(collect_round_seconds())) + " 秒", 640, 464, 18, Color("#c7d5e0"))
+		text_center("摆钱凑整 · 点一张路子", 640, 486, 18, Color("#c9b08a"))
+		text_center("代价会跟着钱一起记上", 640, 508, 16, Color("#e7a6a4"))
 	else: # dodge
 		card_badge(accent, "¥" + str(bill_amount), 32)
 		text_center("限时 " + str(int(bill_time)) + " 秒", 640, 464, 18, Color("#c7d5e0"))
@@ -3452,26 +3561,120 @@ func draw_challenge_stage() -> bool:
 	return true
 
 
+## 摆钱凑整的版式：上面是账目（已凑/应付 + 轮次 + 本轮倒计时），
+## 中间是柜台（3D 舞台当背景板，压一层暗），上面横排三张路子卡，下面是一沓越攒越厚的钱。
 func draw_collect() -> void:
-	draw_challenge_header("限时凑钱", "应付 ¥" + str(bill_amount) + "　　已凑 ¥" + str(collected),
-		"点击金色硬币凑钱 · 黑色的是假币，点了倒扣", 0)
+	draw_collect_header()
 	if draw_challenge_stage():
-		return
-	for c in coins:
-		draw_coin(c)
+		panel(CHALLENGE_STAGE, Color(0.03, 0.05, 0.06, 0.58), 16) # 柜台还在，但视线要落在卡上
+	draw_collect_pile()
+	var rects := collect_card_rects()
+	for i in range(rects.size()):
+		draw_collect_card(rects[i], collect_cards[i], i)
+	draw_popups() # 钱和代价的飘字必须压在这层卡面之上（HUD 那一层的飘字已被跳过）
 
-func draw_coin(c: Dictionary) -> void:
-	var pos: Vector2 = c.position
-	if c.fake:
-		draw_circle(pos, 24, Color("#3a3f44"))
-		draw_circle(pos, 20, Color("#262a2e"))
-		draw_arc(pos, 17, 0.0, TAU, 24, Color("#8a8f94"), 3)
-		text_at("假", pos + Vector2(-9, 7), 18, Color("#e7a6a4"))
+
+func draw_popups() -> void:
+	for p in popups:
+		text_at(String(p.text), Vector2(p.position), int(p.get("size", 28)), p.get("color", Color("#ffe092")))
+
+
+func draw_collect_header() -> void:
+	panel(CHALLENGE_PANEL, Color("#1b2838"), 22)
+	var head := "账单到期 · 摆钱凑整"
+	if challenge_label != "":
+		head += "　" + challenge_label
+	text_at(head, Vector2(78, 168), 30, Color("#efbc72"))
+	text_at("已凑 ¥" + str(collected) + " / 应付 ¥" + str(bill_amount), Vector2(78, 216), 24, Color("#e2d3b4"))
+	if collected >= bill_amount:
+		text_at("凑够了 —— 这就去交", Vector2(78, 250), 18, Color("#8fd05a"))
 	else:
-		draw_circle(pos, 24, Color("#a8742a"))
-		draw_circle(pos, 20, Color("#efbc72"))
-		draw_arc(pos, 17, 0.0, TAU, 24, Color("#7a4f18"), 3)
-		text_at("¥", pos + Vector2(-8, 8), 20, Color("#5e3c12"))
+		text_at("点一张路子：钱进袋，代价也一起记上", Vector2(78, 250), 18, Color("#9fb2c4"))
+	text_at("第 " + str(collect_round) + " / " + str(collect_rounds) + " 轮", Vector2(870, 216), 22, Color("#c9b08a"))
+	var secs := maxf(0.0, bill_timer)
+	# 倒计时压在右上角空位：再往上会和转盘/构筑按钮挤在一起
+	text_at("本轮 %.1f 秒" % secs, Vector2(1046, 252), 20,
+		Color("#ff9a76") if secs <= 3.0 else Color("#c9b08a"))
+	# 凑钱进度：满格就是过关
+	panel(Rect2(78, 272, 1124, 14), Color("#141a22"), 7)
+	var frac := clampf(float(collected) / maxf(1.0, float(bill_amount)), 0.0, 1.0)
+	if frac > 0.0:
+		panel(Rect2(78, 272, 1124 * frac, 14), Color("#8fd05a") if collected >= bill_amount else Color("#efbc72"), 7)
+	# 本轮倒计时：细细一条红线，快没了自己会缩
+	var tfrac := clampf(bill_timer / collect_round_seconds(), 0.0, 1.0)
+	panel(Rect2(78, 290, 1124, 4), Color("#141a22"), 2)
+	if tfrac > 0.0:
+		panel(Rect2(78, 290, 1124 * tfrac, 4), Color(0.90, 0.32, 0.20, 0.9), 2)
+
+
+## 一张路子：一张摊在柜台上的纸。钱写在最上面（大），代价紧跟其下（红胶囊），
+## 底下那句说明是"这条路子长什么样"，让人替这个角色心疼一下。
+func draw_collect_card(rect: Rect2, card: Dictionary, index: int) -> void:
+	var mouse := get_global_mouse_position()
+	var picked := index == collect_picked
+	var can_pick := collect_picked < 0 and collect_pick_t <= 0.0
+	var hover := can_pick and rect.has_point(mouse)
+	var accent := Color("#8fd05a")
+	if index == 1:
+		accent = Color("#efbc72")
+	elif index >= 2:
+		accent = Color("#e8836b")
+	var lift := -12.0 if picked else (-7.0 if hover else 0.0)
+	var r := Rect2(rect.position + Vector2(0, lift), rect.size)
+	panel(Rect2(r.position + Vector2(5, 9), r.size), Color(0.02, 0.04, 0.05, 0.5), 8) # 纸落在柜台上的影子
+	panel(r, Color("#f4ecd8"), 8)
+	panel(Rect2(r.position.x, r.position.y, r.size.x, 7), accent.darkened(0.12), 4) # 顶边颜色 = 危险度
+	text_center(String(card.get("title", "路子")), r.get_center().x, r.position.y + 40, 24, Color("#3b2c1e"))
+	text_center("+¥" + str(collect_gain(card)), r.get_center().x, r.position.y + 104, 46, Color("#a8421c"))
+	var cost_text := collect_cost_text(card)
+	if cost_text != "":
+		var cw := font.get_string_size(cost_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
+		panel(Rect2(r.get_center().x - cw / 2.0 - 14, r.position.y + 124, cw + 28, 30), Color("#f6dbd4"), 15)
+		text_center(cost_text, r.get_center().x, r.position.y + 145, 16, Color("#a8402c"))
+	else:
+		text_center("不欠人情", r.get_center().x, r.position.y + 145, 16, Color("#6f7f5f"))
+	var desc := TextParagraph.new()
+	desc.width = r.size.x - 44.0
+	desc.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	desc.break_flags = TextServer.BREAK_MANDATORY | TextServer.BREAK_WORD_BOUND | TextServer.BREAK_ADAPTIVE
+	desc.add_string(String(card.get("desc", "")), font, 15)
+	desc.draw(get_canvas_item(), Vector2(r.position.x + 22, r.position.y + 172), Color("#6b5a46"))
+	if picked:
+		draw_rect(r, Color("#ffd166"), false, 3.0)
+	elif hover:
+		draw_rect(r, accent.lightened(0.2), false, 3.0)
+		text_center("选定", r.get_center().x, r.end.y - 10, 15, Color("#a8421c"))
+
+
+## 卡面代价文案：同一套语义（力气 / 新账），卡面、飘字、结算小结都从这里出，不会说两套话。
+func collect_cost_text(card: Dictionary) -> String:
+	var kind := String(card.get("cost", "none"))
+	if kind == "stamina":
+		return "力气 -" + str(int(card.get("cost_value", 0.0)))
+	if kind == "bill":
+		var amount := maxi(5, int(round(float(bill_amount) * float(card.get("cost_ratio", 0.4)))))
+		return "多一张 ¥" + str(amount) + " 的账"
+	return ""
+
+
+## 桌上那沓钱：张数跟着进度走 —— 不用看数字也知道还差多少。
+func draw_collect_pile() -> void:
+	var frac := clampf(float(collected) / maxf(1.0, float(bill_amount)), 0.0, 1.0)
+	var base := Vector2(640, 660)
+	var sheets := 2 + int(frac * 9.0)
+	for i in range(sheets):
+		draw_set_transform(base + Vector2(0, -5.0 * float(i)), sin(float(i) * 2.1) * 0.05, Vector2.ONE)
+		var paper := Color("#e6ecd8").darkened(0.05 * float(i % 3))
+		panel(Rect2(-50, -12, 100, 22), paper, 3)
+		draw_line(Vector2(-42, -1), Vector2(42, -1), Color("#aab598"), 1.5)
+		draw_set_transform(Vector2.ZERO)
+	# 最上面压几枚硬币：钱堆得越高，硬币越多
+	var coins_on_top := int(frac * 6.0)
+	for i in range(coins_on_top):
+		var p := base + Vector2(-58.0 + float(i) * 23.0, -6.0 - 5.0 * float(sheets) + sin(float(i)) * 3.0)
+		draw_circle(p, 9.0, Color("#a8742a"))
+		draw_circle(p, 7.0, Color("#efbc72"))
+	text_center("凑到 ¥" + str(collected), 640, base.y + 22, 15, Color("#c9b08a"))
 
 func draw_heart(pos: Vector2) -> void:
 	draw_circle(pos + Vector2(-4, -2), 5, Color("#e7a6a4"))

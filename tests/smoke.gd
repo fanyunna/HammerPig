@@ -149,34 +149,67 @@ func run() -> void:
     check(game.phase == "card", "the second card pops after the same beat")
     game.card_type = "collect"
     game.apply_card()
-    check(game.phase == "challenge" and game.bill_timer > 0.0, "collect bill enters challenge with timer")
+    check(game.phase == "challenge" and game.bill_timer > 0.0, "collect bill enters challenge with a round timer")
+    check(game.collect_cards.size() == 3, "the table is dealt three ways to get money")
+    check(game.collect_round == 1 and game.collect_rounds >= 3, "the first round starts with rounds left")
     var challenge_start_score: int = game.score
-    game.coins.clear()
-    game.coins.append({"position": Vector2(400, 400), "velocity": Vector2.ZERO, "value": int(game.settings.coin_value), "fake": false, "life": 5.0})
-    game.click_coin(Vector2(400, 400))
-    check(game.collected == int(game.settings.coin_value), "clicking a coin collects its value")
-    game.coins.append({"position": Vector2(500, 400), "velocity": Vector2.ZERO, "value": -int(game.settings.coin_value), "fake": true, "life": 5.0})
-    game.click_coin(Vector2(500, 400))
-    check(game.collected == 0, "fake coin reduces collected")
     var bills_before_card: int = game.unpaid_bills
+    # 选最左那张（稳）：钱进袋，代价轻
+    var first_card: Dictionary = game.collect_cards[0]
+    var first_gain: int = game.collect_gain(first_card)
+    game.click_collect(game.collect_card_rects()[0].get_center())
+    check(game.collected == first_gain, "picking a way collects its money")
+    game._process(0.6)
+    check(game.collect_round == 2 and game.collect_cards.size() == 3, "the next round is dealt after the pick")
+    # 犹豫超时：这一轮白过，钱不涨
+    var coins_before_timeout: int = game.collected
+    var round_before_timeout: int = game.collect_round
+    game.bill_timer = 0.0
+    game._process(0.1)
+    game._process(0.5)
+    check(game.collected == coins_before_timeout, "a timeout wastes the round instead of paying out")
+    check(game.collect_round > round_before_timeout or game.phase != "challenge", "a timeout still burns a round")
+    # 凑够即过关（清账 + 奖励）
     game.collected = game.bill_amount
-    game._process(0.0)
+    game.collect_advance()
     check(game.phase == "playing" and game.score == challenge_start_score + int(game.settings.bill_reward), "clearing bill keeps money and rewards")
     check(game.unpaid_bills == bills_before_card - 1, "clearing a bill removes one from the unpaid stack")
 
-    # fail collect bill -> deduct
+    # 代价：借新账 / 耗力气，两条路都真的落在本局状态上
     game.card_type = "collect"
     game.phase = "card"
     game.apply_card()
-    game._process(game.bill_time + 0.1)
-    check(game.score == challenge_start_score + int(game.settings.bill_reward) - int(game.settings.bill_amount) and game.phase == "playing", "failing bill deducts amount")
+    var pain_before: float = game.stamina
+    game.collect_apply_cost({"cost": "stamina", "cost_value": 12.0})
+    check(game.stamina < pain_before and game.stamina >= 6.0, "a stamina cost really drains the swinging arm")
+    var iou_before: int = game.unpaid_bills
+    var debt_text: String = game.collect_apply_cost({"cost": "bill", "cost_ratio": 0.4, "debt_name": "欠条"})
+    check(game.unpaid_bills == iou_before + 1 and debt_text.contains("的账"), "borrowing money signs a new bill")
+    game.phase = "playing"
+    game.collect_cards.clear()
+    game.challenge_bill_tag = ""
+    var score_before_fail: int = game.score
+
+    # fail collect bill -> deduct（轮次用尽还没凑齐）
+    game.card_type = "collect"
+    game.phase = "card"
+    game.apply_card()
+    game.collect_round = game.collect_rounds
+    game.collected = 0
+    game.bill_timer = 0.0
+    game._process(0.1)
+    game._process(0.6)
+    check(game.score == score_before_fail - int(game.settings.bill_amount) and game.phase == "playing", "running out of rounds deducts the amount")
 
     # bankrupt
     game.score = int(game.settings.bill_amount)
     game.card_type = "collect"
     game.phase = "card"
     game.apply_card()
-    game._process(game.bill_time + 0.1)
+    game.bill_timer = 0.0
+    game.collect_round = game.collect_rounds
+    game._process(0.1)
+    game._process(0.6)
     check(game.phase == "bankrupt" and game.score == 0, "balance at 0 goes bankrupt")
     key_press(KEY_R)
     check(game.score == 0 and game.phase == "playing" and game.next_card == int(game.settings.card_first_at), "R resets after bankruptcy")
@@ -1399,6 +1432,10 @@ func run() -> void:
     game.bill_data["challenge_rest_seconds"] = 0.0
     for b in game.bills: # 账单全部推到远期：别让日历到期考核抢这次触发
         b["due_day"] = game.game_day + 999
+    # 随机抽的账单里本来就可能有房租：先清干净，让"房东绑哪张房租"变成唯一解（否则断言会跟抽卡走）
+    for i in range(game.bills.size() - 1, -1, -1):
+        if String(game.bills[i].get("effect_id", "")) == "collection":
+            game.bills.remove_at(i)
     # 造一张没还的房租（催收效果挂在房租上）
     game.bills.append({"name": "房租", "amount": 560, "no": "T999", "id": "rent",
         "effect_id": "collection", "due": "第999天", "due_day": game.game_day + 999})
