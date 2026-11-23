@@ -77,9 +77,21 @@ var swing := 0.0
 const BillManagerScript := preload("res://scripts/bill_manager.gd")
 const Hammer3DScript := preload("res://scripts/hammer3d.gd")
 const WheelScript := preload("res://scripts/lucky_wheel.gd")
+const ShopScript := preload("res://scripts/shop.gd")
 var bills_fx # 账单效果：电费停电 / 信用卡利息 / 房租催收（BillManagerScript 实例）
 var hammer3d # 独立透明视口中的立体锤光标
 var wheel # 幸运转盘：独立子节点，低侵入，只读写 main 的公开状态
+var shop # 商店/背包/技能/锤子模块（最上层，独立自绘）
+var charging := false # 重力锤蓄力中
+var charge_t := 0.0
+var charge_time := 1.0
+var stun_t := 0.0 # 重力锤落地硬直
+var magnet_fx_t := 0.0
+var magnet_fx_pos := Vector2.ZERO
+var magnet_fx_r := 0.0
+var gravity_fx_t := 0.0
+var gravity_fx_pos := Vector2.ZERO
+var gravity_fx_r := 0.0
 var earned_total := 0 # 本局累计赚到的钱（房租催收按它跨阈值触发）
 var last_observed_score := 0
 var vignette_tex: ImageTexture # 停电暗角贴图（开局生成一次）
@@ -175,6 +187,9 @@ func _ready() -> void:
 	wheel = WheelScript.new()
 	add_child(wheel) # 最后挂上：画在所有东西之上（抽奖按钮 / 弹窗 / 金币特效）
 	wheel.setup(self)
+	shop = ShopScript.new()
+	add_child(shop) # 最后挂上：画在转盘之上（商店/背包/快捷栏 HUD）
+	shop.setup(self)
 	reset_game()
 
 
@@ -732,7 +747,7 @@ func mouse_in_pig_bounds() -> bool:
 func sync_cursor() -> void:
 	var hide: bool = bool(settings.get("hammer_cursor", true))
 	hide = hide and (phase == "playing" or (phase == "challenge" and card_type == "dodge"))
-	hide = hide and not intro_open and not bill_open and bill_detail < 0 and not quick_bill_hover() and not help_open and not build.panel_open
+	hide = hide and not intro_open and not bill_open and bill_detail < 0 and not quick_bill_hover() and not help_open and not build.panel_open and not (shop != null and shop.is_open())
 	hide = hide and not (wheel != null and wheel.is_open()) # 转盘弹窗里得看得见箭头
 	hide = hide and (phase != "playing" or mouse_in_pig_bounds()) # 敲猪时鼠标进小猪活动区才举锤；区外还给系统箭头自由点 UI
 	if hide == cursor_hidden:
@@ -965,6 +980,13 @@ func reset_game() -> void:
 			pig3d[i].apply_type(Dictionary(pigs[i].type))
 	if wheel != null:
 		wheel.reset_run() # 新局：机会/连击/三个 buff 计时全部清零（多余的金猪视口上面已随 pig3d 裁掉）
+	if shop != null:
+		shop.reset_run()
+	charging = false
+	charge_t = 0.0
+	stun_t = 0.0
+	magnet_fx_t = 0.0
+	gravity_fx_t = 0.0
 	queue_redraw()
 
 func _process(delta: float) -> void:
@@ -975,6 +997,9 @@ func _process(delta: float) -> void:
 		hammer3d = Hammer3DScript.new()
 		add_child(hammer3d)
 	if wheel != null and wheel.is_open(): # 转盘弹窗：整局暂停（猪停刷、不能砸）；转盘自己的 _process 继续转
+		queue_redraw()
+		return
+	if shop != null and shop.is_open(): # 商店/背包打开：整局暂停，技能冷却也跟着停（tick 不调用）
 		queue_redraw()
 		return
 	if build.panel_open or bill_open or bill_detail >= 0 or quick_bill_hover() or help_open:
@@ -1001,8 +1026,13 @@ func _process(delta: float) -> void:
 	var want_fade := 1.0 if bills_fx.is_active("blackout") else 0.0
 	blackout_fade = move_toward(blackout_fade, want_fade, delta / 0.6)
 	double_timer = maxf(0.0, double_timer - delta)
+	stun_t = maxf(0.0, stun_t - delta)
+	magnet_fx_t = maxf(0.0, magnet_fx_t - delta)
+	gravity_fx_t = maxf(0.0, gravity_fx_t - delta)
 	if wheel != null:
 		wheel.tick(delta) # 转盘层：余额跨线送机会、buff 独立倒计时、金猪压扁/到期
+	if shop != null:
+		shop.tick(delta) # 技能冷却/buff 只在游戏运行时走；面板打开时这里不会被调到
 	combo_timer = maxf(0.0, combo_timer - delta)
 	if combo_timer <= 0.0:
 		combo_count = 0
@@ -1032,14 +1062,16 @@ func _process(delta: float) -> void:
 			stamina_regen -= float(fatigue_rule.get("stamina_regen_penalty", 0.12))
 		stamina_regen = maxf(0.0, stamina_regen)
 		stamina = minf(stamina_max, stamina + stamina_regen * delta)
-		if mouse_in_pig_bounds(): # 区外取消跟随：锤子停在最后一次瞄准处，光标也还给了系统
+		if mouse_in_pig_bounds() and stun_t <= 0.0: # 区外取消跟随；重力锤硬直时冻结
 			hammer_position = mouse_pos
+		if charging: # 重力锤蓄力：时间越长范围越大、伤害越高
+			charge_t = minf(charge_t + delta, charge_time)
 		for i in range(pigs.size()):
 			var pig: Dictionary = pigs[i]
 			pig.flash = maxf(0.0, pig.flash - delta)
 			pig.hop = maxf(0.0, pig.hop - delta)
 			if pig.hp > 0:
-				pig.position += pig.velocity * delta * wheel_speed_mul()
+				pig.position += pig.velocity * delta * wheel_speed_mul() * shop_speed_mul()
 				# 走路弹跳：相位随位移推进（每 26px 一步、蹦一下），速度越快蹦得越快
 				pig.hop_phase = fmod(float(pig.get("hop_phase", 0.0)) + pig.velocity.length() * delta / 26.0 * PI, TAU)
 				if absf(pig.velocity.x) > 4.0: # 近乎竖直走时别乱翻朝向
@@ -1114,10 +1146,28 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.keycode == KEY_SPACE or event.keycode == KEY_ENTER:
 				wheel.confirm_result()
 		return
+	if shop != null and shop.is_open(): # 商店/背包打开：输入全转发给 shop（购买/拖拽、T/I/Esc 关闭）
+		shop.handle_input(event)
+		return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_C and phase == "playing" and not help_open and not bill_open and bill_detail < 0:
 		build.panel_open = not build.panel_open
 		queue_redraw()
 		return
+	if event is InputEventKey and event.pressed and not event.echo and phase == "playing" and not build.panel_open and not help_open and not bill_open and bill_detail < 0 and shop != null:
+		if event.keycode == KEY_T: # 商店
+			charging = false
+			shop.try_open_shop()
+			queue_redraw()
+			return
+		if event.keycode == KEY_I: # 背包
+			charging = false
+			shop.try_open_backpack()
+			queue_redraw()
+			return
+		if event.keycode in [KEY_1, KEY_2, KEY_3]: # 释放技能
+			shop.try_activate_skill(int(event.keycode - KEY_1))
+			queue_redraw()
+			return
 	if build.panel_open:
 		return
 	if event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_H or (help_open and event.keycode == KEY_ESCAPE)):
@@ -1133,6 +1183,20 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 	if help_open:
 		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and phase == "playing" and shop != null and shop.is_gravity() and not build.panel_open and not bill_open and bill_detail < 0:
+		# 重力锤：长按蓄力，松手砸下（避开普通点击即挥锤的路径）
+		if event.pressed:
+			var gp := get_global_mouse_position()
+			if PIG_BOUNDS.has_point(gp) and mouse_in_pig_bounds() and stun_t <= 0.0:
+				charging = true
+				charge_t = 0.0
+				charge_time = float(shop.current_hammer().get("charge_time", 1.0))
+				hammer_position = gp
+			return
+		else:
+			if charging:
+				_gravity_strike()
+			return
 	if event is InputEventMouseButton and event.pressed:
 		var wheel_up: bool = event.button_index == MOUSE_BUTTON_WHEEL_UP
 		var wheel_down: bool = event.button_index == MOUSE_BUTTON_WHEEL_DOWN
@@ -1264,7 +1328,7 @@ func end_round_exhausted() -> void:
 	Sound.play("fail")
 
 # Match the visible sprite position, including its walking bounce and hit hop.
-func strike_target(point: Vector2) -> Dictionary:
+func strike_target(point: Vector2, radius_mul := 1.0) -> Dictionary:
 	var target: Dictionary = {}
 	var best := INF
 	for pig in pigs:
@@ -1283,7 +1347,7 @@ func strike_target(point: Vector2) -> Dictionary:
 			center += PIG3D_OFFSET
 		if pig.hop > 0.0:
 			center.y -= sin(pig.hop / 0.24 * PI) * 26 * scale
-		var radius := Vector2(84.0, 64.0) * scale * hammer_reach_multiplier + Vector2(10, 10)
+		var radius := Vector2(84.0, 64.0) * scale * hammer_reach_multiplier * radius_mul + Vector2(10, 10)
 		var distance := ((point - center) / radius).length_squared()
 		if distance <= 1.0 and distance < best:
 			best = distance
@@ -1292,6 +1356,8 @@ func strike_target(point: Vector2) -> Dictionary:
 
 func strike(point: Vector2) -> void:
 	if phase != "playing" or cooldown > 0.0 or build.panel_open:
+		return
+	if stun_t > 0.0: # 重力锤落地硬直：不能移动、不能攻击
 		return
 	var cost: float = build.cost(self)
 	if stamina < cost:
@@ -1304,52 +1370,14 @@ func strike(point: Vector2) -> void:
 	cooldown = build.cooldown(self)
 	stamina = maxf(0.0, stamina - cost)
 	var landed := false # 有没有打到东西：空挥要有和命中完全不同的声音
-	var target := strike_target(point)
-	for pig in pigs:
-		if pig == target and not target.is_empty():
-			hits += 1
-			pig.flash = 0.14
-			pig.hop = 0.24 # 受击跳动
-			if combo_timer > 0.0:
-				combo_count += 1
-			else:
-				combo_count = 1
-			combo_timer = float(settings.get("combo_window", 1.5))
-			var hit_damage := 1 + hammer_damage_bonus
-			if hammer_damage_bonus > 0 and combo_count >= 3:
-				hit_damage += 1 # 重锤 + 连击：連击热度达到 3 后再加一伤害
-			build.progress("berserker", self)
-			hit_damage += build.damage_bonus() + build.consume_focus(self)
-			if combo_count == 5:
-				build.progress("steadiness", self)
-			var critical: bool = build.roll_critical()
-			if critical:
-				hit_damage *= 2
-				Sound.play("crit")
-			build.critical_reward(critical, self)
-			pig.hp -= hit_damage
-			impact_position = point
-			impact_timer = 0.18
-			impact_broken = pig.hp <= 0
-			shake = maxf(shake, 0.065)
-			Sound.play("pop", 0.65 if impact_broken else 0.9, 0.65 if impact_broken else 0.35)
-			if bool(pig.get("wheel_gold", false)): # 转盘金猪走专属结算：一锤 +¥200，压扁回弹后爆金币
-				landed = true
-				_resolve_wheel_gold_hit(pig)
-				break
-			if stamina_cost_reduction > 0.0 and combo_bonus_per_hit > 0 and hits % 4 == 0:
-				stamina = minf(float(settings.get("stamina_max", 100)), stamina + 8.0) # 轻柄 + 连击卡：每四击回复体力
-			if combo_count > combo_max:
-				combo_max = combo_count
-			if combo_count == int(settings.get("combo_threshold_fever", 5)):
-				Sound.play("crit") # 连击刚到狂热线：一声上行琶音，手心发烫
-			var base_pitch := 1.1 if pig.hp <= 0 else 0.85
-			Sound.play("crack", minf(1.5, base_pitch + float(settings.get("combo_pitch_step", 0.05)) * (combo_count - 1)))
-			landed = true
-			if pig.hp <= 0:
-				settle_card_break(pig, false)
-			build.after_hit(pig, point, self)
-			break
+	var hid: String = shop.current_hammer_id if shop != null else "iron"
+	match hid:
+		"dual":
+			landed = _strike_dual(point)
+		"magnet":
+			landed = _strike_magnet(point)
+		_:
+			landed = _strike_single(point)
 	if wheel != null: # 转盘机会的连击计数：砸中 +1，漏砸（挥空）清零
 		if landed:
 			wheel.on_landed_hit()
@@ -1359,6 +1387,147 @@ func strike(point: Vector2) -> void:
 		stamina = maxf(0.0, stamina - float(settings.get("stamina_miss_extra", 0.0)))
 		build.register_miss(self)
 		Sound.play("miss", 1.0, 0.7)
+
+
+func _strike_single(point: Vector2) -> bool:
+	var target := strike_target(point)
+	if target.is_empty():
+		return false
+	_hit_pig(target, point, shop.hammer_base_damage() if shop != null else 1.0)
+	return true
+
+
+func _strike_dual(point: Vector2) -> bool:
+	var target := strike_target(point)
+	if target.is_empty():
+		return false
+	var dmg: float = shop.hammer_base_damage() if shop != null else 0.65
+	_hit_pig(target, point, dmg)
+	_hit_pig(target, point, dmg) # 第二击：两次攻击共用一套冷却
+	return true
+
+
+func _strike_magnet(point: Vector2) -> bool:
+	var radius: float = shop.pull_radius() if shop != null else 150.0
+	var falloff: float = shop.falloff_min() if shop != null else 0.4
+	var base: float = shop.hammer_base_damage() if shop != null else 1.0
+	var entries: Array[Dictionary] = []
+	for pig in pigs:
+		if pig.hp <= 0:
+			continue
+		var d: float = pig.position.distance_to(point)
+		if d <= radius:
+			entries.append({"pig": pig, "dist": d})
+	if entries.is_empty():
+		return false
+	for e in entries: # 吸附：把附近小猪吸到落点
+		e.pig.position = point
+	for e in entries: # 递减结算：离中心越近伤害越高
+		var t: float = clampf(float(e.dist) / radius, 0.0, 1.0)
+		var dmg: float = base * lerpf(1.0, falloff, t)
+		_hit_pig(e.pig, point, dmg)
+	_spawn_magnet_fx(point, radius)
+	return true
+
+
+func _hit_pig(pig: Dictionary, point: Vector2, base_damage: float) -> void:
+	if pig.hp <= 0:
+		return
+	hits += 1
+	pig.flash = 0.14
+	pig.hop = 0.24 # 受击跳动
+	if combo_timer > 0.0:
+		combo_count += 1
+	else:
+		combo_count = 1
+	combo_timer = float(settings.get("combo_window", 1.5))
+	var hit_damage := base_damage + float(hammer_damage_bonus)
+	if hammer_damage_bonus > 0 and combo_count >= 3:
+		hit_damage += 1.0 # 重锤 + 连击：连击热度达到 3 后再加一伤害
+	build.progress("berserker", self)
+	hit_damage += float(build.damage_bonus()) + float(build.consume_focus(self))
+	if combo_count == 5:
+		build.progress("steadiness", self)
+	var critical: bool = build.roll_critical()
+	if critical:
+		hit_damage *= 2.0
+		Sound.play("crit")
+	build.critical_reward(critical, self)
+	if shop != null:
+		hit_damage *= shop.hammer_damage_mul() # 盲盒 +15% 伤害
+	pig.hp -= hit_damage
+	impact_position = point
+	impact_timer = 0.18
+	impact_broken = pig.hp <= 0
+	shake = maxf(shake, 0.065)
+	Sound.play("pop", 0.65 if impact_broken else 0.9, 0.65 if impact_broken else 0.35)
+	if bool(pig.get("wheel_gold", false)): # 转盘金猪走专属结算：一锤 +¥200，压扁回弹后爆金币
+		_resolve_wheel_gold_hit(pig)
+		return
+	if stamina_cost_reduction > 0.0 and combo_bonus_per_hit > 0 and hits % 4 == 0:
+		stamina = minf(float(settings.get("stamina_max", 100)), stamina + 8.0) # 轻柄 + 连击卡：每四击回复体力
+	if combo_count > combo_max:
+		combo_max = combo_count
+	if combo_count == int(settings.get("combo_threshold_fever", 5)):
+		Sound.play("crit") # 连击刚到狂热线：一声上行琶音，手心发烫
+	var base_pitch := 1.1 if pig.hp <= 0 else 0.85
+	Sound.play("crack", minf(1.5, base_pitch + float(settings.get("combo_pitch_step", 0.05)) * (combo_count - 1)))
+	if pig.hp <= 0:
+		settle_card_break(pig, false)
+	build.after_hit(pig, point, self)
+
+
+func _gravity_strike() -> void:
+	charging = false
+	if phase != "playing" or cooldown > 0.0 or build.panel_open:
+		return
+	if stun_t > 0.0:
+		return
+	var cost: float = build.cost(self)
+	if stamina < cost:
+		stamina_flash = 0.4
+		popups.append({"position": hammer_position + Vector2(-30, -40), "life": 0.7, "text": "体力不足"})
+		end_round_exhausted()
+		return
+	var power := clampf(charge_t / maxf(0.01, charge_time), 0.0, 1.0)
+	var h: Dictionary = shop.current_hammer() if shop != null else {}
+	var dmg := lerpf(float(h.get("damage_min", 1.0)), float(h.get("damage_max", 3.0)), power)
+	var radius_mul := lerpf(1.0, float(h.get("radius_max", 1.6)), power)
+	swing = 0.16
+	cooldown = build.cooldown(self)
+	stamina = maxf(0.0, stamina - cost)
+	var landed := false
+	var target := strike_target(hammer_position, radius_mul)
+	if not target.is_empty():
+		_hit_pig(target, hammer_position, dmg)
+		landed = true
+	stun_t = float(h.get("stun", 0.45))
+	_spawn_gravity_fx(hammer_position, radius_mul)
+	if wheel != null:
+		if landed:
+			wheel.on_landed_hit()
+		else:
+			wheel.on_missed_swing()
+	if not landed:
+		stamina = maxf(0.0, stamina - float(settings.get("stamina_miss_extra", 0.0)))
+		build.register_miss(self)
+		Sound.play("miss", 1.0, 0.7)
+
+
+func shop_speed_mul() -> float:
+	return shop.speed_mul() if shop != null else 1.0
+
+
+func _spawn_magnet_fx(point: Vector2, radius: float) -> void:
+	magnet_fx_t = 0.25
+	magnet_fx_pos = point
+	magnet_fx_r = radius
+
+
+func _spawn_gravity_fx(point: Vector2, radius_mul: float) -> void:
+	gravity_fx_t = 0.3
+	gravity_fx_pos = point
+	gravity_fx_r = 90.0 * radius_mul
 
 ## 转盘金猪的结算：固定 +¥200（不吃卡片/连击加成），压扁回弹之后由转盘层引爆金币特效
 func _resolve_wheel_gold_hit(pig: Dictionary) -> void:
@@ -1398,8 +1567,13 @@ func settle_card_break(pig: Dictionary, secondary: bool) -> void:
 	else:
 		if double_timer > 0.0:
 			gain *= 2
-		gain = roundi(float(gain) * wheel_score_mul())
+		var skill_mul := 1.0
+		if shop != null:
+			skill_mul = shop.score_mul() * shop.kill_bonus_mul()
+		gain = roundi(float(gain) * skill_mul * wheel_score_mul())
 		score += gain
+		if shop != null:
+			shop.consume_kill()
 	broken += 1
 	build.progress("hunter", self)
 	spawn_particles(pig.position, kind, gain)
@@ -2525,6 +2699,17 @@ func ui_hover_at(p: Vector2) -> bool:
 
 
 func draw_hammer() -> void:
+	if magnet_fx_t > 0.0: # 磁吸锤：蓝红环形吸力场
+		var mp := clampf(magnet_fx_t / 0.25, 0.0, 1.0)
+		draw_arc(magnet_fx_pos, magnet_fx_r * (1.0 - mp * 0.5), 0.0, TAU, 40, Color(0.55, 0.62, 1.0, 0.6 * mp), 4.0 * mp + 1.0, true)
+		draw_arc(magnet_fx_pos, magnet_fx_r * (1.0 - mp * 0.5) * 0.7, 0.0, TAU, 40, Color(1.0, 0.4, 0.4, 0.4 * mp), 2.0, true)
+	if gravity_fx_t > 0.0: # 重力锤：黑紫冲击波 + 地面裂纹
+		var gp := clampf(gravity_fx_t / 0.3, 0.0, 1.0)
+		var gcol := Color(0.55, 0.4, 0.95, 0.7 * gp)
+		draw_arc(gravity_fx_pos, gravity_fx_r * (1.0 - gp), 0.0, TAU, 48, gcol, 5.0 * gp + 1.0, true)
+		for i in range(6):
+			var dir := Vector2.RIGHT.rotated(float(i) * TAU / 6.0 + 0.3)
+			draw_line(gravity_fx_pos + dir * 10.0, gravity_fx_pos + dir * (20.0 + 30.0 * gp), gcol, 2.0, true)
 	if phase == "playing" and not ui_hover_at(hammer_position):
 		var aim_color := Color("#ffe092") if not strike_target(hammer_position).is_empty() else Color(1, 1, 1, 0.65)
 		draw_arc(hammer_position, 7.0, 0.0, TAU, 24, aim_color, 1.5, true)
@@ -2551,6 +2736,12 @@ func draw_hammer() -> void:
 	if SHOW_HAND:
 		# 握点取柄的下段（不是末端）：柄尾要露在拳头外面，"握着"才看得懂
 		draw_shadow_arm(pivot + Vector2(19, 74).rotated(angle))
+	if shop != null and shop.current_hammer_id != "iron":
+		# 特殊锤子：程序化自绘外观，取代默认铁锤贴图/3D/回退锤
+		_draw_special_hammer(pivot, angle, shop.current_hammer_id)
+		if SHOW_HAND:
+			draw_shadow_fist(pivot + Vector2(19, 74).rotated(angle), angle)
+		return
 	if hammer_tex != null: # 贴图锤：皮手套握木柄锤，跟随鼠标，挥锤下压+旋转沿用 swing 动画
 		var hs := hammer_tex.get_size()
 		var hfit := 250.0 / maxf(hs.x, hs.y) # 最长边约 250：比原 3D 锤略大，握锤的手也进了画面
@@ -2574,6 +2765,42 @@ func draw_hammer() -> void:
 	draw_set_transform(Vector2.ZERO)
 	if SHOW_HAND:
 		draw_shadow_fist(pivot + Vector2(19, 74).rotated(angle), angle) # 拳头画在锤子之上，才像真的攥着柄
+
+
+## 三款可替换锤子的程序化外观（发光色/符号/蓄力效果）
+func _draw_special_hammer(pivot: Vector2, angle: float, hid: String) -> void:
+	var accent := Color("#ffffff")
+	if shop != null:
+		accent = Color(String(shop.current_hammer().get("accent", "#ffffff")))
+	var charge := 0.0
+	if hid == "gravity" and charging:
+		charge = clampf(charge_t / maxf(0.01, charge_time), 0.0, 1.0)
+	draw_set_transform(pivot, angle, Vector2.ONE)
+	match hid:
+		"dual": # 双节小连枷：前后两个小锤头 + 弹簧
+			panel(Rect2(-4, -86, 9, 66), Color("#5e412f"), 4)
+			draw_line(Vector2(-2, -24), Vector2(-2, -40), Color("#ff8c3a"), 3)
+			panel(Rect2(-34, -40, 34, 28), Color("#8a8f93"), 5)
+			panel(Rect2(-34, -40, 34, 28).grow(-2), accent, 4)
+			panel(Rect2(4, -40, 34, 28), Color("#8a8f93"), 5)
+			panel(Rect2(4, -40, 34, 28).grow(-2), accent, 4)
+		"gravity": # 巨型方头长柄锤，蓄力黑紫发光
+			panel(Rect2(-6, -70, 12, 96), Color("#3a2f2f"), 5)
+			panel(Rect2(-58, -34, 28, 40), Color("#a33b3b"), 5) # 红色重型皮带
+			panel(Rect2(-52, -100, 104, 60), Color("#1a1a22"), 8)
+			panel(Rect2(-52, -100, 104, 60).grow(-4), accent.darkened(0.4), 7)
+			if charge > 0.0:
+				var glow := accent
+				glow.a = 0.35 + 0.5 * charge
+				draw_rect(Rect2(-52, -100, 104, 60), glow, false, 4)
+				draw_arc(Vector2(0, -70), 44 + 40 * charge, 0.0, TAU, 32, glow, 3.0 * charge + 0.5)
+		"magnet": # 圆盘磁铁锤：左蓝 N 右红 S
+			panel(Rect2(-4, -60, 10, 80), Color("#3a5a8c"), 5)
+			draw_circle(Vector2(0, -66), 34, Color("#2a2a30"))
+			draw_colored_polygon(PackedVector2Array([Vector2(0, -66), Vector2(-34, -66), Vector2(-25, -48), Vector2(-25, -84)]), Color("#4f8ef7"))
+			draw_colored_polygon(PackedVector2Array([Vector2(0, -66), Vector2(34, -66), Vector2(25, -48), Vector2(25, -84)]), Color("#e85d5d"))
+			draw_arc(Vector2(0, -66), 34, 0.0, TAU, 32, Color("#cfd8e3"), 2)
+	draw_set_transform(Vector2.ZERO)
 
 
 ## 一段肢体：从 a 到 b 的锥形胶囊（起点粗 → 终点细），两端补圆当关节

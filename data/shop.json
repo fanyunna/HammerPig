@@ -1,0 +1,87 @@
+{
+  "hammer_price": 220,
+  "skill_price": 180,
+  "box_price": 200,
+  "backpack_capacity": 3,
+  "quickbar_size": 3,
+  "hammers": {
+    "iron": {
+      "name": "普通铁锤",
+      "hits": 1,
+      "damage": 1.0,
+      "radius": 1.0,
+      "desc": "基础铁锤",
+      "model": "buildin://iron",
+      "accent": "#c9c9cf"
+    },
+    "dual": {
+      "name": "连打锤",
+      "hits": 2,
+      "damage": 0.65,
+      "radius": 1.0,
+      "desc": "连砸 2 次，单下较低",
+      "tip": "连续两次砸击，单伤偏低，共用冷却。无时效，永久持有，购买后替换当前主武器。",
+      "model": "res://assets/models/shop/dual.tscn",
+      "accent": "#ff8c3a"
+    },
+    "gravity": {
+      "name": "重力锤",
+      "charge": true,
+      "charge_time": 1.0,
+      "damage_min": 1.0,
+      "damage_max": 3.0,
+      "radius": 1.0,
+      "radius_max": 1.6,
+      "stun": 0.45,
+      "desc": "长按蓄力，范围伤害递增，落地硬直",
+      "tip": "长按蓄力，蓄力越久伤害与范围越大，砸击后自身短暂硬直。无时效，永久持有，购买后替换当前主武器。",
+      "model": "res://assets/models/shop/gravity.tscn",
+      "accent": "#8b5cf6"
+    },
+    "magnet": {
+      "name": "磁吸锤",
+      "damage": 1.0,
+      "radius": 1.0,
+      "pull_radius": 150.0,
+      "falloff_min": 0.4,
+      "desc": "吸附附近小猪，范围递减伤害",
+      "tip": "砸击时吸附附近小猪至落点中心，再结算伤害。无时效，永久持有，购买后替换当前主武器。",
+      "model": "res://assets/models/shop/magnet.tscn",
+      "accent": "#4f8ef7"
+    }
+  },
+  "hammer_pool": ["dual", "gravity", "magnet"],
+  "skills": {
+    "hourglass": {
+      "name": "凝时沙漏",
+      "cooldown": 10.0,
+      "duration": 2.5,
+      "slow_mul": 0.4,
+      "desc": "全场小猪移速降至 40%",
+      "tip": "全场小猪移速降至40%，持续2.5秒。技能可重复释放，刷新持续时间。",
+      "model": "res://assets/models/shop/hourglass.tscn"
+    },
+    "abacus": {
+      "name": "鎏金算筹",
+      "cooldown": 12.0,
+      "duration": 4.0,
+      "score_mul": 2.0,
+      "desc": "击杀得分 ×2",
+      "tip": "4秒内击杀小猪得分×2，金币不翻倍。技能持续时间内可叠加击杀收益。",
+      "model": "res://assets/models/shop/abacus.tscn"
+    }
+  },
+  "skill_pool": ["hourglass", "abacus"],
+  "box": {
+    "name": "神秘盲盒",
+    "tip": "消耗200金币抽取随机奖励，可能获得锤子、技能、金币、伤害加成或分数倍率。",
+    "model": "res://assets/models/shop/box.tscn"
+  },
+  "box_pool": [
+    { "type": "hammer", "weight": 1 },
+    { "type": "skill", "weight": 1 },
+    { "type": "coins", "weight": 1, "amount": 25 },
+    { "type": "damage_up", "weight": 1, "pct": 0.15 },
+    { "type": "triple_kill", "weight": 1, "kills": 3, "mult": 3.0 }
+  ]
+}
