@@ -18,37 +18,29 @@ OUT = os.path.join(BASE, 'assets', 'art', 'bulb_lit.png')
 W, H = 512, 640
 CX = 256.0
 
+# 玻璃形状按真实白炽灯泡（A19）量：圆球 + 短颈插进灯座，肩部是球和圆柱
+# 相交出来的 S 过渡，底部是圆弧收拢 —— 绝不是收成尖点的水滴形。
+BULB_CY, RX, RY = 432.0, 205.0, 196.0   # 球部椭圆（球心/半径）
+NECK_HW, NECK_BOT = 74.0, 345.0          # 颈部半宽 / 颈长（半宽略小于灯座，玻璃是插进座里的）
+GLASS_TOP = 230.0
+
 
 def smoothstep(t):
     t = np.clip(t, 0.0, 1.0)
     return t * t * (3.0 - 2.0 * t)
 
 
-def width_profile():
-    """梨形宽度剖面：密集控制点线性插值后高斯平滑，避免凹凸波浪。"""
-    pts = [(216, 48), (240, 62), (268, 78), (296, 94), (324, 106),
-           (352, 114), (380, 118), (410, 118), (440, 112), (470, 100),
-           (500, 84), (528, 62), (552, 36), (572, 10), (577, 0)]
-    ys = np.arange(216, 578, dtype=np.float32)
-    w = np.interp(ys, np.array([p[0] for p in pts], np.float32),
-                  np.array([p[1] for p in pts], np.float32)).astype(np.float32)
-    # 高斯平滑消波浪（sigma 9 行 ≈ 1.2 屏幕像素，不至于改变大形）
-    kernel = np.exp(-0.5 * (np.arange(-24, 25) / 9.0) ** 2)
-    kernel /= kernel.sum()
-    w_smooth = np.convolve(np.pad(w, 24, mode='edge'), kernel, mode='valid')
-    return ys, w_smooth
-
-
 def build_glass():
-    """玻璃：返回 RGBA 图。"""
+    """玻璃：球部椭圆 + 颈部圆柱重叠后模糊取阈 —— 肩部自然 S 形，圆底无尖点。"""
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
-    ys, wp = width_profile()
-    half = np.interp(yy[:, 0], ys, wp)  # 每行的半宽
-    in_y = (yy >= 216) & (yy <= 577)
-    mask = (np.abs(xx - CX) <= half[:, None]) & in_y
+    ball = (((xx - CX) / RX) ** 2 + ((yy - BULB_CY) / RY) ** 2) <= 1.0
+    neck = (np.abs(xx - CX) <= NECK_HW) & (yy >= GLASS_TOP) & (yy <= NECK_BOT)
+    m = Image.fromarray(((ball | neck) * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(5))
+    mask = np.asarray(m, np.float32) > 140
+    half = mask.sum(axis=1).astype(np.float32) * 0.5  # 每行半宽
 
-    # 径向暖光渐变（光心略偏下：灯丝位置）
-    d = np.sqrt((xx - CX) ** 2 + (yy - 400.0) ** 2) / 128.0
+    # 径向暖光渐变（光心 = 灯丝位置，球心略偏下）
+    d = np.sqrt((xx - CX) ** 2 + (yy - 430.0) ** 2) / 150.0
     stops = [(0.0, (255, 246, 208)), (0.5, (255, 230, 156)),
              (0.9, (243, 206, 118)), (1.2, (206, 164, 88))]
     r = np.zeros_like(d)
@@ -75,7 +67,7 @@ def build_glass():
     rgb = np.stack([r, g, b], axis=-1) * (1 - mix) + dark * mix
 
     # 底部内透光：光从灯丝往玻璃底聚
-    dg = np.sqrt((xx - CX) ** 2 + (yy - 468.0) ** 2)
+    dg = np.sqrt((xx - CX) ** 2 + (yy - 505.0) ** 2)
     add = (110.0 * np.exp(-(dg / 52.0) ** 2))[..., None]
     rgb = np.clip(rgb + add * np.array([1.0, 0.82, 0.42]), 0, 255)
 
@@ -113,14 +105,14 @@ def add_filament(img, glass_alpha):
             layer.putalpha(a)
         return Image.composite(layer, Image.new('RGBA', (W, H), (0, 0, 0, 0)), clip)
 
-    # 支撑线（不裁剪也行，但裁了更干净）
+    # 支撑线（从颈内垂下来，末端挂在球心附近）
     sup = Image.new('RGBA', (W, H), (0, 0, 0, 0))
     sd = ImageDraw.Draw(sup)
-    sd.line([(219, 244), (231, 374)], fill=(92, 70, 46, 255), width=7, joint='curve')
-    sd.line([(293, 244), (281, 374)], fill=(92, 70, 46, 255), width=7, joint='curve')
+    sd.line([(235, 255), (243, 400)], fill=(92, 70, 46, 255), width=7, joint='curve')
+    sd.line([(277, 255), (269, 400)], fill=(92, 70, 46, 255), width=7, joint='curve')
     img.alpha_composite(Image.composite(sup, Image.new('RGBA', (W, H), (0, 0, 0, 0)), clip))
 
-    coil = [(230, 374), (242, 436), (256, 350), (270, 436), (282, 374)]
+    coil = [(242, 415), (251, 478), (256, 392), (261, 478), (270, 415)]
     img.alpha_composite(line_layer(coil, (255, 138, 48), 30, 30, 0.9))
     img.alpha_composite(line_layer(coil, (255, 196, 100), 16, 12, 0.95))
     img.alpha_composite(line_layer(coil, (255, 250, 222), 8, 2))
@@ -130,14 +122,14 @@ def add_specular(img):
     """左上柔和高光 + 右下微弱次高光，玻璃质感的关键。"""
     lay = Image.new('RGBA', (W, H), (0, 0, 0, 0))
     dr = ImageDraw.Draw(lay)
-    dr.ellipse([(172, 256), (238, 344)], fill=(255, 255, 248, 240))
-    lay = lay.rotate(-18, center=(205, 300), resample=Image.BICUBIC)
+    dr.ellipse([(198, 342), (262, 424)], fill=(255, 255, 248, 240))
+    lay = lay.rotate(-18, center=(230, 383), resample=Image.BICUBIC)
     lay = lay.filter(ImageFilter.GaussianBlur(8))
     img.alpha_composite(lay)
 
     lay2 = Image.new('RGBA', (W, H), (0, 0, 0, 0))
     dr2 = ImageDraw.Draw(lay2)
-    dr2.ellipse([(298, 318), (332, 402)], fill=(255, 250, 230, 130))
+    dr2.ellipse([(308, 400), (342, 478)], fill=(255, 250, 230, 105))
     lay2 = lay2.filter(ImageFilter.GaussianBlur(9))
     img.alpha_composite(lay2)
 
@@ -174,9 +166,9 @@ def build_socket():
     socket.paste(body, (x0, y0), mask)
     od = ImageDraw.Draw(socket)
     od.rounded_rectangle([x0, y0, x1, y1], radius=24, outline=(58, 42, 26, 255), width=5)
-    # 底部接触帽
-    od.rounded_rectangle([190, y1 - 2, 322, y1 + 24], radius=10,
-                         fill=(76, 54, 30, 255), outline=(50, 36, 20, 255), width=3)
+    # 底部封口：座底本身就是金属底盖，压一道暗条即可，不再突出一块
+    od.rectangle([x0 + 6, y1 - 18, x1 - 6, y1 - 6], fill=(96, 66, 36, 255))
+    od.rectangle([x0 + 6, y1 - 18, x1 - 6, y1 - 16], fill=(214, 178, 110, 255))
     return socket
 
 
