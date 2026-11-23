@@ -117,6 +117,7 @@ var last_observed_score := 0
 var vignette_tex: ImageTexture # 停电暗角贴图（开局生成一次）
 var glow_tex: ImageTexture # 灯泡辉光贴图：中心亮、边缘透明的径向渐变（开局生成一次）
 var bulb_tex: Texture2D # 精绘灯泡精灵（tools/gen_bulb.py 离线生成）：玻璃渐变/灯丝辉光/黄铜灯座都烤在图里
+var paper_tex: Texture2D # 旧纸纤维贴图（tools/gen_paper.py 生成，四边无缝）：按格拼贴，纸多大都不会被拉长
 var bonus_timer := 0.0 # 支付电费后的挥锤冷却减免还剩多久
 var blackout_fade := 0.0 # 停电暗化的渐入进度（0→1，避免闪进闪出）
 var collection_flash := 0.0 # 房东催收的红色警告脉冲
@@ -277,6 +278,7 @@ func _load_art_textures() -> void:
 	hammer_tex = _load_png_texture(ART_DIR + "hammer_hand.png")
 	bg_tex = _load_png_texture(ART_DIR + "bg_western.png")
 	bulb_tex = _load_png_texture(ART_DIR + "bulb_lit.png")
+	paper_tex = _load_png_texture(ART_DIR + "paper_grain.png")
 
 
 ## 开局/重开：从目录里随机抽 start_count 张不重复的账单，按金额升序（小额在上，先还得起）
@@ -649,25 +651,127 @@ func add_overdue_bill() -> void:
 	sort_bills()
 
 
+## 旧纸的"手气"：纯函数，同一张账单每帧长得一样，重开一局才会换一张纸。
+func _paper_hash(seed_value: int, k: int) -> float:
+	return fposmod(sin(float(seed_value) * 12.9898 + float(k) * 78.233) * 43758.5453, 1.0)
+
+
+## 一条边上的抖动点：纸是刀切的、还被翻旧了，边线绝不能是数学上的直线。
+func _paper_edge(a: Vector2, b: Vector2, normal: Vector2, seed_value: int, k0: int) -> PackedVector2Array:
+	var steps := maxi(2, int(a.distance_to(b) / 26.0))
+	var pts := PackedVector2Array()
+	for s in range(steps):
+		var t := float(s) / float(steps)
+		var wobble := (_paper_hash(seed_value, k0 + s) - 0.5) * 2.2
+		pts.append(a.lerp(b, t) + normal * wobble)
+	return pts
+
+
+## 手裁纸的轮廓：四角切个小斜角、每边微微抖 —— 完美圆角矩形正是"假纸"的第一眼破绽。
+func _paper_outline(rect: Rect2, seed_value: int) -> PackedVector2Array:
+	var p := rect.position
+	var e := rect.end
+	var c := 3.0 # 角上的小斜角
+	var outline := PackedVector2Array()
+	outline.append_array(_paper_edge(Vector2(p.x + c, p.y), Vector2(e.x - c, p.y), Vector2(0, 1), seed_value, 0))
+	outline.append(Vector2(e.x, p.y + c))
+	outline.append_array(_paper_edge(Vector2(e.x, p.y + c), Vector2(e.x, e.y - c), Vector2(-1, 0), seed_value, 40))
+	outline.append(Vector2(e.x - c, e.y))
+	outline.append_array(_paper_edge(Vector2(e.x - c, e.y), Vector2(p.x + c, e.y), Vector2(0, -1), seed_value, 80))
+	outline.append(Vector2(p.x, e.y - c))
+	outline.append_array(_paper_edge(Vector2(p.x, e.y - c), Vector2(p.x, p.y + c), Vector2(1, 0), seed_value, 120))
+	outline.append(Vector2(p.x + c, p.y))
+	return outline
+
+
+## 一张旧纸：底色 → 纸纤维（贴图按格铺，绝不拉伸）→ 四边四角的陈年黄 →
+## 霉斑 / 茶渍 / 折痕 → 磨损的褐色纸边。随机全部由 seed_value 决定，静止时不会跳。
+func paper_sheet(rect: Rect2, tint: Color, seed_value: int, aged := 1.0, stains := true) -> void:
+	var outline := _paper_outline(rect, seed_value)
+	draw_colored_polygon(outline, tint)
+	# 纸纤维：格子按纸的尺寸均分，贴图四边无缝，接缝看不出来
+	if paper_tex != null:
+		var cell := 88.0
+		var cols := maxi(1, int(ceil(rect.size.x / cell)))
+		var rows := maxi(1, int(ceil(rect.size.y / cell)))
+		var cw := rect.size.x / float(cols)
+		var ch := rect.size.y / float(rows)
+		for cx in range(cols):
+			for cy in range(rows):
+				draw_texture_rect(paper_tex,
+					Rect2(rect.position + Vector2(cx * cw, cy * ch), Vector2(cw + 0.7, ch + 0.7)), false)
+	# 陈年发黄：暗角贴图拉满整张纸 —— 角落比中间老得多，且平滑无硬边
+	if vignette_tex != null:
+		draw_texture_rect(vignette_tex, rect, false, Color(0.40, 0.25, 0.09, 0.44 * aged))
+	if stains:
+		# 霉斑：辉光贴图染成褐色当柔和污块，比硬边圆自然得多
+		if glow_tex != null:
+			var blots := 2 + int(_paper_hash(seed_value, 91) * 2.0)
+			for s in range(blots):
+				var radius := 9.0 + _paper_hash(seed_value, 100 + s) * 24.0
+				var center := rect.position + Vector2(
+					rect.size.x * (0.10 + 0.80 * _paper_hash(seed_value, 110 + s)),
+					rect.size.y * (0.10 + 0.80 * _paper_hash(seed_value, 120 + s)))
+				draw_texture_rect(glow_tex,
+					Rect2(center - Vector2(radius, radius) * 2.0, Vector2(radius, radius) * 4.0),
+					false, Color(0.42, 0.28, 0.11, 0.13 * aged))
+		# 大约三分之一的纸被杯子烫过：一圈淡淡茶渍
+		if _paper_hash(seed_value, 77) > 0.58:
+			var cup := rect.position + Vector2(rect.size.x * 0.72, rect.size.y * 0.30)
+			var cup_r := minf(rect.size.x, rect.size.y) * 0.30
+			draw_arc(cup, cup_r, 0.0, TAU, 30, Color(0.48, 0.30, 0.12, 0.15 * aged), 1.6)
+			draw_arc(cup, maxf(4.0, cup_r - 2.0), 0.0, TAU, 30, Color(0.48, 0.30, 0.12, 0.07 * aged), 1.0)
+	# 折痕：一道亮一道暗，读起来才像被折过的纸
+	var creases := 1 + int(_paper_hash(seed_value, 55) * 2.0)
+	for c in range(creases):
+		var t := 0.24 + 0.46 * _paper_hash(seed_value, 60 + c)
+		var slope := 0.10 if c % 2 == 0 else -0.07
+		var a := Vector2(rect.position.x, rect.position.y + rect.size.y * t)
+		var b := Vector2(rect.end.x, rect.position.y + rect.size.y * (t + slope))
+		draw_line(a, b, Color(1.0, 0.99, 0.92, 0.20), 1.0)
+		draw_line(a + Vector2(0, 1.2), b + Vector2(0, 1.2), Color(0.28, 0.18, 0.08, 0.09), 1.0)
+	# 磨损的纸边：一道极淡的褐色，纸就不像"贴"在桌上的一个方块
+	var closed := outline.duplicate()
+	closed.append(outline[0])
+	draw_polyline(closed, Color(0.33, 0.22, 0.10, 0.34 * aged), 1.2)
+
+
 ## 一张纸质账单（够比例排版，所以桌上一沓、账本里一张、放大的一张都能复用）
 func draw_bill_paper(r: Rect2, b: Dictionary, can_pay: bool, tilt: float, lift: float) -> void:
 	draw_set_transform(r.get_center() + Vector2(0, -lift), tilt, Vector2.ONE) # 绕纸心歪一点，才不像表格行
 	var half := r.size / 2.0
 	var rect := Rect2(-half, r.size)
-	var paper := Color("#f8f1de") if can_pay else Color("#ded6c2")
-	panel(Rect2(-half + Vector2(3 + lift, 4 + lift), r.size), Color(0.04, 0.07, 0.07, 0.4), 3) # 纸落在桌上的影子
-	panel(rect, paper, 3)
-	panel(Rect2(-half, Vector2(5, r.size.y)), Color("#c05a4e") if can_pay else Color("#a8756c"), 1) # 左侧骑缝红条
-	draw_colored_polygon(PackedVector2Array([half, half - Vector2(13, 0), half - Vector2(0, 13)]), paper.darkened(0.16)) # 右下折角
-	draw_line(Vector2(-half.x + 12, -half.y + r.size.y * 0.58), Vector2(half.x - 12, -half.y + r.size.y * 0.58), paper.darkened(0.13), 1) # 纸上的横格线
+	# 旧法由账单号 + 金额决定：翻账本时每张纸都不一样，但画面不动它就不会闪
+	var seed_value := absi(String(b.get("no", "0")).hash()) + int(b.get("amount", 0))
+	var paper := Color("#f1e7cd") if can_pay else Color("#d8ceb6")
+	# 影子跟着纸的毛边走，才不是贴上去的一块方影
+	draw_colored_polygon(_paper_outline(Rect2(rect.position + Vector2(3 + lift, 4 + lift), rect.size), seed_value),
+		Color(0.04, 0.07, 0.07, 0.36))
+	paper_sheet(rect, paper, seed_value, 0.9)
+	# 左侧骑缝红条：颜料被纸吃进去，边缘不齐
+	draw_colored_polygon(PackedVector2Array([
+		Vector2(-half.x, -half.y + 7), Vector2(-half.x + 5, -half.y + 6),
+		Vector2(-half.x + 5, half.y - 6), Vector2(-half.x, half.y - 7),
+	]), Color(0.66, 0.24, 0.17, 0.82) if can_pay else Color(0.50, 0.31, 0.26, 0.66))
+	# 右下折角：掀起的那一小块背面比正面暗
+	var fold := PackedVector2Array([half, half - Vector2(13, 0), half - Vector2(0, 13)])
+	draw_colored_polygon(fold, paper.darkened(0.15))
+	draw_line(fold[1], fold[2], Color(0.34, 0.24, 0.11, 0.32), 1.0)
+	# 预印的横格线：真账单是带表格的，线比纸深一点点就够
+	var line_col := Color(0.58, 0.50, 0.36, 0.5) if can_pay else Color(0.55, 0.50, 0.42, 0.4)
+	draw_line(Vector2(-half.x + 12, -half.y + r.size.y * 0.58), Vector2(half.x - 12, -half.y + r.size.y * 0.58), line_col, 1.0)
+	draw_line(Vector2(-half.x + 12, -half.y + r.size.y * 0.75), Vector2(half.x - 12, -half.y + r.size.y * 0.75),
+		Color(line_col, line_col.a * 0.6), 1.0)
 	var title_size := 15 if r.size.x < 200.0 else 20
-	text_at(String(b.name), Vector2(-half.x + 13, -half.y + r.size.y * 0.40), title_size, Color("#3d3630") if can_pay else Color("#6d675c"))
+	text_at(String(b.name), Vector2(-half.x + 13, -half.y + r.size.y * 0.40), title_size, Color("#3a3126") if can_pay else Color("#6a6459"))
 	var amt := "¥" + str(int(b.amount))
 	var amt_size := 20 if r.size.x < 200.0 else 26
 	var w: float = font.get_string_size(amt, HORIZONTAL_ALIGNMENT_LEFT, -1, amt_size).x
-	text_at(amt, Vector2(half.x - 15 - w, -half.y + r.size.y * 0.44), amt_size, Color("#b8541f") if can_pay else Color("#8a8272"))
+	text_at(amt, Vector2(half.x - 15 - w, -half.y + r.size.y * 0.44), amt_size,
+		Color(0.65, 0.25, 0.11, 0.94) if can_pay else Color("#8a8272"))
 	var status := bill_status_text(b)
-	text_at(status, Vector2(-half.x + 13, -half.y + r.size.y * 0.86), 11, Color("#b8541f") if not bool(b.get("overdue", false)) else Color("#9a5c4e"))
+	text_at(status, Vector2(-half.x + 13, -half.y + r.size.y * 0.86), 11,
+		Color(0.62, 0.28, 0.18, 0.9) if not bool(b.get("overdue", false)) else Color("#9a5c4e"))
 	draw_set_transform(Vector2.ZERO)
 
 
@@ -707,7 +811,10 @@ func draw_bills() -> void:
 		var bill: Dictionary = bills[index]
 		var rect := quick_bill_rect(slot)
 		var amount := bill_pay_amount(index)
-		panel(rect, Color("#e9dfc6"), 5)
+		# 桌上这一沓也用真纸：手心那几张更旧一点（被翻得最勤）
+		var paper_seed := absi(String(bill.get("no", "0")).hash()) + amount
+		draw_colored_polygon(_paper_outline(Rect2(rect.position + Vector2(2, 3), rect.size), paper_seed), Color(0.03, 0.05, 0.05, 0.4))
+		paper_sheet(rect, Color("#efe5cb"), paper_seed, 0.75, false)
 		var name := String(bill.name)
 		if name.length() > 10:
 			name = name.substr(0, 9) + "…"
@@ -805,16 +912,26 @@ func draw_bill_detail() -> void:
 	draw_set_transform(DETAIL_RECT.get_center(), -0.012, Vector2.ONE)
 	var half := DETAIL_RECT.size / 2.0
 	var rect := Rect2(-half, DETAIL_RECT.size)
-	var paper := Color("#f6f0dd")
-	panel(Rect2(-half + Vector2(8, 10), DETAIL_RECT.size), Color(0.03, 0.05, 0.05, 0.5), 8)
-	panel(rect, paper, 6)
-	panel(Rect2(-half, Vector2(DETAIL_RECT.size.x, 96)), Color("#c0594a"), 6) # 抬头红条
-	text_center("催 缴 通 知 单", 0.0, -half.y + 40, 20, Color("#fdeee9"))
-	text_center(String(b.name), 0.0, -half.y + 76, 28, Color("#fff3ea"))
+	var paper := Color("#efe4c8")
+	var detail_seed := absi(String(b.get("no", "0")).hash()) + int(b.amount)
+	draw_colored_polygon(_paper_outline(Rect2(rect.position + Vector2(8, 10), rect.size), detail_seed), Color(0.03, 0.05, 0.05, 0.5))
+	paper_sheet(rect, paper, detail_seed, 1.25) # 摊开看的那张最老：霉斑、茶渍、折痕都全
+	# 抬头红条：印刷红压得浅一点，下沿压一道暗线，像油墨渗进纸里
+	var header := Rect2(-half.x + 1, -half.y + 1, DETAIL_RECT.size.x - 2, 94)
+	draw_rect(header, Color(0.72, 0.28, 0.21, 0.88))
+	draw_line(Vector2(-half.x + 1, -half.y + 95), Vector2(half.x - 1, -half.y + 95), Color(0.42, 0.15, 0.10, 0.55), 2.0)
+	draw_line(Vector2(-half.x + 1, -half.y + 99), Vector2(half.x - 1, -half.y + 99), Color(0.42, 0.15, 0.10, 0.22), 1.0)
+	# 左边两个装订孔：这是从催收档案里抽出来的一张
+	for i in range(2):
+		var hole_y := -half.y + 150.0 + float(i) * 100.0
+		draw_circle(Vector2(-half.x + 18, hole_y), 6.5, Color(0.10, 0.075, 0.05, 0.92))
+		draw_arc(Vector2(-half.x + 18, hole_y), 6.5, 0.0, TAU, 16, Color(0.55, 0.45, 0.30, 0.5), 1.2)
+	text_center("催 缴 通 知 单", 0.0, -half.y + 40, 20, Color(0.99, 0.93, 0.88, 0.95))
+	text_center(String(b.name), 0.0, -half.y + 76, 28, Color(1.0, 0.96, 0.90, 0.96))
 	text_at("户号 " + String(b.no), Vector2(-half.x + 40, -half.y + 150), 17, Color("#6d675c"))
 	text_at("当前 " + format_game_date(game_day) + "　·　" + bill_status_text(b), Vector2(-half.x + 40, -half.y + 178), 17, Color("#9a5c4e"))
-	text_center("¥" + str(amount), 0.0, -half.y + 300, 84, Color("#3d3630"))
-	text_center("应 缴 金 额", 0.0, -half.y + 336, 17, Color("#8a8272"))
+	text_center("¥" + str(amount), 0.0, -half.y + 300, 84, Color(0.22, 0.18, 0.13, 0.93))
+	text_center("应 缴 金 额", 0.0, -half.y + 336, 17, Color(0.42, 0.36, 0.26, 0.9))
 	for i in range(3): # 明细：像真账单那样列几行
 		var y := -half.y + 372 + i * 34
 		draw_line(Vector2(-half.x + 40, y + 12), Vector2(half.x - 40, y + 12), paper.darkened(0.14), 1)
@@ -2686,7 +2803,8 @@ func draw_bill_stack(base: Vector2, count: int) -> void:
 	for i in range(n):
 		var off := Vector2(sin(i * 2.1) * 5.0, -float(i) * 6.0) # 偏移要够大，否则叠纸看起来只有一张
 		var last: bool = i == n - 1
-		panel(Rect2(base + off, Vector2(46, 30)), Color("#f3ead2") if last else Color("#e6dcc4"), 3)
+		# HUD 里的小图标也走真纸：只留毛边和一点点旧，不放霉斑（太小会看成脏点）
+		paper_sheet(Rect2(base + off, Vector2(46, 30)), Color("#efe5cb") if last else Color("#e1d7bf"), 17 + i, 0.6, false)
 	# 这里原来在纸右边写着「待还 ¥xxx」，正好压住中部那行提示：HUD 这一条只有 98px 高，
 	# 横向再塞一个数字就撞车。待还总额在账本封面和桌上那沓纸上有（「合计 ¥」），不缺这一处。
 

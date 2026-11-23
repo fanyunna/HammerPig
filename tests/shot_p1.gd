@@ -64,6 +64,12 @@ func run() -> void:
 	game.bill_open = true
 	await snap("tmp_p1_ledger.png")
 
+	# 单张放大：旧纸质的催缴通知单（霉斑 / 茶渍 / 折痕 / 装订孔 / 印章）
+	game.bill_detail = 0
+	await snap("tmp_p1_detail.png")
+	game.bill_detail = -1
+	game.bill_open = false
+
 	# 账单到期考核：摆钱凑整（三张路子卡 + 桌上那沓钱 + 轮次倒计时）
 	game.bill_open = false
 	game.phase = "playing"

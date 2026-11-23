@@ -684,6 +684,7 @@ func run() -> void:
     game.blackout_fade = 0.0
     check(game.bulb_brightness_at(game.elapsed) == 1.0, "a paid-up bulb burns steady")
     check(game.bulb_tex != null, "the painted bulb sprite loads (vector fallback only if missing)")
+    check(game.paper_tex != null, "the paper-grain sprite loads (bills fall back to flat tint if missing)")
 
     # 余额不足：不扣钱、效果不解除
     game.score = 5
