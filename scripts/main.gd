@@ -23,7 +23,7 @@ const LEGACY_PANEL := Rect2(240, 80, 800, 584) # 传承商店全屏面板
 const LEGACY_CLOSE_RECT := Rect2(585, 600, 110, 40) # 商店关闭按钮（鼠标玩家的出口；键盘 B/Esc 也行）
 const INTRO_RECT := Rect2(112, 476, 234, 52) # 开场序幕的「敲开第一只」按钮
 const RESET_RECT := Rect2(1090, 36, 140, 46)
-const COLLECT_BOARD_RECT := Rect2(172, 146, 158, 84) # 催收预警板：钉在余额和体力条之间。只报信不可点 —— 躲债只由条件触发
+const COLLECT_BOARD_RECT := Rect2(446, 152, 130, 70) # 催收预警牌：挂在体力牌和日历牌之间。只报信不可点 —— 躲债只由条件触发
 const PIG_BOUNDS := Rect2(270, 320, 740, 310) # 小猪在赌桌上的活动范围；同时决定 3D 桌板大小。
 # ↑ 纵向从 230 撑到 310：小猪要铺满整张桌子，挤在中间一条带子里看不出"满桌都是猪"
 const PIG3D_SIZE := 138.0 # 3D 猪纹理的绘制边长（基准；实际尺寸见 pig_size()，由 pig_draw_size 配置）
@@ -3101,14 +3101,12 @@ func _draw() -> void:
 	if not intro_open: # 商店按钮：结算面板（finished/bankrupt）上可见
 		if phase == "finished" or phase == "bankrupt":
 			button(LEGACY_SHOP_RECT, "传承商店")
-	panel(Rect2(52, 137, 1176, 98), Color("#37251a"))
-	text_at("体力 " + str(int(stamina)) + " / " + str(int(stamina_max)), Vector2(350, 174), 20, bar_color)
-	text_at("游戏日期 " + format_game_date(game_day), Vector2(760, 196), 17, Color("#efbc72"))
-	panel(Rect2(350, 194, 280, 13), Color("#241a10"), 5)
-	panel(Rect2(350, 194, 280 * clampf(stamina / stamina_max, 0.0, 1.0), 13), bar_color, 5)
-	text_at("余额 ¥", Vector2(80, 174), 17, Color("#c9b08a"))
-	text_at(str(score).pad_zeros(3), Vector2(80, 214), 32, Color("#efbc72"))
-	draw_collect_board() # 催收预警板：房东还有多远来堵门（只报信，不可点）
+	# —— 顶部横梁：一条酒馆木梁 + 四块统一小铜牌（余额 / 体力 / 房东挂牌 / 日历） ——
+	draw_beam(Rect2(52, 137, 1176, 98))
+	draw_money_plate(Rect2(68, 150, 128, 72))
+	draw_stamina_plate(Rect2(210, 150, 222, 72), stamina_max, bar_color)
+	draw_date_plate(Rect2(592, 150, 98, 72))
+	draw_collect_board() # 挂钉木牌最后画：晃起来的时候压在梁上才对
 	# 猪的价目表移到底部整行：中部这块只有 220px 宽，四种猪的名字加金额会被账单纸压住
 	# 右上角原来写着「目标 ¥120 摆脱破产」+ 一条进度条，去掉了：把目标写在脸上，玩家就是在为数字打工，
 	# 而不是"再敲一只就够"。round_target 仍然生效（攒够即结算），只是不让玩家盯着倒计时。
@@ -3618,10 +3616,68 @@ func draw_upgrade_choices() -> void:
 		description.draw(get_canvas_item(), Vector2(rect.position.x + 18.0, description_top), Color("#e2e9e4"))
 		text_center("选择 " + str(i + 1), rect.get_center().x, rect.end.y - 22, 16, accent.lightened(0.3))
 
-## 考核浮层的上半屏 HUD。两种玩法只差标题/说明，排版完全一致 ——
-## 玩家第二次遇到账单时不用重新认一遍界面。lives = 0 时不画心（凑钱那关没有命）。
-## 催收预警板：钉在 HUD 的余额和体力之间。只报信、不可点 —— 躲债只由条件触发，
-## 这块牌子告诉玩家"房东还有多远来堵门"。房租还清就剩一块平静的旧木牌。
+## —— 顶部 HUD：一条酒馆木梁，上面钉四块统一小铜牌 ——
+## 统一的容器感是 HUD 不显廉价的关键：同一底色、同一铜边、同一两级字号。
+
+func draw_beam(rect: Rect2) -> void:
+	panel(rect, Color("#2e1d12"), 12)
+	# 上下沿各压一条受光/背光，木梁才有圆边体积
+	panel(Rect2(rect.position.x + 8, rect.position.y + 3, rect.size.x - 16, 6), Color("#3d2a18"), 3)
+	panel(Rect2(rect.position.x + 8, rect.end.y - 9, rect.size.x - 16, 6), Color("#1e1209"), 3)
+	draw_rect(rect.grow(-2), Color("#4a3018"), false, 2.0)
+
+
+func draw_hud_plate(rect: Rect2) -> void:
+	panel(rect, Color("#1f130b"), 10)
+	draw_rect(rect.grow(-2.5), Color("#8a6a42"), false, 1.6)
+	draw_line(rect.position + Vector2(8, 5), rect.position + Vector2(rect.size.x - 8, 5),
+		Color(0.85, 0.70, 0.45, 0.22), 1.5) # 左上一线受光
+
+
+func draw_money_plate(rect: Rect2) -> void:
+	draw_hud_plate(rect)
+	var coin := rect.position + Vector2(27, 36)
+	draw_circle(coin, 15.0, Color("#a8742a"))
+	draw_circle(coin, 11.0, Color("#efbc72"))
+	text_center("¥", coin.x, coin.y + 5.0, 12, Color("#7a4d16"))
+	text_at("余额", rect.position + Vector2(50, 28), 13, Color("#c9b08a"))
+	text_at("¥" + str(score), rect.position + Vector2(50, 58), 24, Color("#ffe092"))
+
+
+func draw_stamina_plate(rect: Rect2, stamina_max: float, bar_color: Color) -> void:
+	draw_hud_plate(rect)
+	# 闪电图标
+	var b := rect.position + Vector2(14, 14)
+	draw_colored_polygon(PackedVector2Array([
+		b + Vector2(10, 0), b + Vector2(2, 14), b + Vector2(8, 14),
+		b + Vector2(4, 26), b + Vector2(16, 11), b + Vector2(9, 11), b + Vector2(15, 0)
+	]), bar_color)
+	text_at("体力", rect.position + Vector2(40, 30), 13, Color("#c9b08a"))
+	var num := str(int(stamina)) + " / " + str(int(stamina_max))
+	var nw := font.get_string_size(num, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+	text_at(num, Vector2(rect.end.x - 12.0 - nw, rect.position.y + 30), 13, Color("#e8f5e0"))
+	var bar := Rect2(rect.position.x + 14, rect.position.y + 38, rect.size.x - 28, 15)
+	panel(bar, Color("#120c07"), 7)
+	draw_rect(bar.grow(-1), Color("#5a4126"), false, 1.2)
+	var fill_w := bar.size.x * clampf(stamina / stamina_max, 0.0, 1.0)
+	panel(Rect2(bar.position, Vector2(fill_w, bar.size.y)), bar_color, 6)
+	# 低体力警戒刻度（15%）：条内嵌一道亮线，掉到线左就发红
+	var tick_x := bar.position.x + bar.size.x * 0.15
+	draw_line(Vector2(tick_x, bar.position.y - 1.0), Vector2(tick_x, bar.end.y + 1.0),
+		Color("#ffe092"), 1.5)
+
+
+func draw_date_plate(rect: Rect2) -> void:
+	draw_hud_plate(rect)
+	var head := Rect2(rect.position.x + 11, rect.position.y + 8, rect.size.x - 22, 17)
+	panel(head, Color("#8a3030"), 5)
+	text_center("第 " + str(game_day) + " 天", head.get_center().x, head.end.y - 4.0, 11, Color("#ffe0d0"))
+	text_center(format_game_date(game_day), rect.get_center().x, rect.end.y - 11.0, 19, Color("#ffe092"))
+
+
+## 催收预警牌：一块用麻绳挂在梁上的小木牌。只报信、不可点 —— 躲债只由条件触发，
+## 这块牌子告诉玩家"房东还有多远来堵门"。房租还清就剩一块灰牌晃着。
+## 上门那一瞬间（collection_flash>0）牌子绕挂钉来回晃，晃幅随脉冲衰减。
 func draw_collect_board() -> void:
 	if phase != "playing":
 		return
@@ -3632,29 +3688,47 @@ func draw_collect_board() -> void:
 	var gap := maxi(0, int(ceilf(bills_fx.collection_next - earned_total))) if rent_due else 0
 	var threshold := maxf(1.0, bills_fx.number("collection", "progress_threshold", 100.0))
 	var imminent := rent_due and left > 0 and float(gap) <= threshold * 0.3
-	panel(COLLECT_BOARD_RECT, Color("#3d2c1c") if rent_due else Color("#2c221a"), 8)
-	var edge := Color("#8a6a42")
+	var rect := COLLECT_BOARD_RECT
+	var pivot := Vector2(rect.get_center().x, rect.position.y - 15.0) # 挂钉位置
+	var swing := 0.0
+	if collection_flash > 0.0:
+		swing = sin(elapsed * 11.0) * 0.16 * clampf(collection_flash / 1.2, 0.0, 1.0)
+	# 绕挂钉旋转：Translate(pivot)·Rotate·Translate(-pivot)。
+	# draw_set_transform(pivot, swing) 只是平移不是旋转 —— 牌子会被平移出梁（踩过）。
+	draw_set_transform_matrix(Transform2D(swing, pivot) * Transform2D(0.0, -pivot))
+	var top_y := rect.position.y - 6.0
+	var cx := rect.get_center().x
+	draw_line(Vector2(pivot.x - 1.5, pivot.y), Vector2(cx - 20.0, top_y), Color("#6a5a44"), 2.0)
+	draw_line(Vector2(pivot.x + 1.5, pivot.y), Vector2(cx + 20.0, top_y), Color("#6a5a44"), 2.0)
+	draw_circle(pivot, 3.4, Color("#9a7a50"))
+	draw_circle(pivot, 1.6, Color("#5a4126"))
+	var body := Rect2(rect.position.x, top_y, rect.size.x, rect.size.y + 6.0)
+	panel(body, Color("#3d2c1c") if rent_due else Color("#2c221a"), 9)
+	draw_rect(body.grow(-3), Color("#8a6a42") if rent_due else Color("#4a3a2a"), false, 1.8)
 	if imminent:
-		edge = Color(0.88, 0.30, 0.18, 0.55 + 0.45 * sin(elapsed * 6.0)) # 快到门槛：红边呼吸
-	elif not rent_due:
-		edge = Color("#4a3a2a")
-	draw_rect(COLLECT_BOARD_RECT.grow(-3), edge, false, 2.0)
-	var cx := COLLECT_BOARD_RECT.get_center().x
-	text_center("房东催收", cx, COLLECT_BOARD_RECT.position.y + 18, 17,
+		draw_rect(body.grow(-3), Color(0.88, 0.30, 0.18, 0.55 + 0.45 * sin(elapsed * 6.0)), false, 2.4)
+	text_center("房东催收" if rent_due else "租约已清", cx, body.position.y + 20, 15,
 		Color("#efbc72") if rent_due else Color("#6a5a44"))
-	if not rent_due:
-		text_center("租约已清", cx, COLLECT_BOARD_RECT.position.y + 44, 14, Color("#7d6a50"))
-		text_center("风平浪静", cx, COLLECT_BOARD_RECT.position.y + 66, 13, Color("#6a5a44"))
-		return
-	if left <= 0:
-		text_center("本局不再上门", cx, COLLECT_BOARD_RECT.position.y + 44, 14, Color("#b59a7c"))
-		text_center("房租仍欠着", cx, COLLECT_BOARD_RECT.position.y + 66, 13, Color("#8a6a52"))
-		return
-	text_center("再赚 ¥" + str(gap) + " 就上门", cx, COLLECT_BOARD_RECT.position.y + 44, 14,
-		Color("#ff9a76") if imminent else Color("#e7c98a"))
-	text_center("本局还能来 " + str(left) + " 次", cx, COLLECT_BOARD_RECT.position.y + 66, 13, Color("#b59a7c"))
+	# 状态胶囊
+	var pill_w := 92.0
+	var pill := Rect2(cx - pill_w * 0.5, body.position.y + 28, pill_w, 19)
+	if rent_due and left > 0:
+		panel(pill, Color("#57200f") if imminent else Color("#4a2c16"), 9)
+		text_center("还差 ¥" + str(gap), cx, pill.end.y - 4.0, 12,
+			Color("#ffb08a") if imminent else Color("#e7c98a"))
+	elif rent_due:
+		panel(pill, Color("#33251a"), 9)
+		text_center("本局不再上门", cx, pill.end.y - 4.0, 12, Color("#b59a7c"))
+	else:
+		panel(pill, Color("#22301e"), 9)
+		text_center("风平浪静", cx, pill.end.y - 4.0, 12, Color("#8fb89a"))
+	text_center("本局还能来 " + str(left) + " 次" if rent_due and left > 0 else "房租还清就不来",
+		cx, body.end.y - 6.0, 11, Color("#8a6a52"))
+	draw_set_transform(Vector2.ZERO)
 
 
+## 考核浮层的上半屏 HUD。两种玩法只差标题/说明，排版完全一致 ——
+## 玩家第二次遇到账单时不用重新认一遍界面。lives = 0 时不画心（凑钱那关没有命）。
 func draw_challenge_header(title: String, info: String, hint: String, lives: int) -> void:
 	panel(CHALLENGE_PANEL, Color("#1b2838"), 22)
 	var head := "账单到期 · " + title

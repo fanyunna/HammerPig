@@ -119,6 +119,8 @@ func run() -> void:
 	print("STEP board")
 	game.phase = "playing"
 	game.reset_game()
+	game.game_day = 1 # 别让天数里程碑的小游戏浮层弹出来挡住横梁
+	game.day_events._close()
 	await process_frame
 	game.intro_open = false
 	game.gamble_used = true
