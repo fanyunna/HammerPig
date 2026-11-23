@@ -640,6 +640,17 @@ func run() -> void:
     check(game.bills_fx.is_active("interest"), "unpaid credit card keeps charging interest")
     check(game.bills_fx.is_active("collection"), "unpaid rent keeps the landlord coming")
 
+    # 屋顶灯泡（十七轮）：欠费时闪烁、缴费后常亮
+    game.blackout_fade = 1.0 # 直接拉满渐入，不等真实的 0.6 秒
+    var flickers := {}
+    for i in range(14):
+        flickers[game.bulb_brightness_at(game.elapsed + 0.37 * i)] = true
+    check(flickers.size() > 1, "the bulb flickers while the power bill is unpaid")
+    check(float(game.bills_fx.number("blackout", "darkness_alpha", 1.0)) < 0.3,
+        "blackout now darkens gently and lets the flickering bulb carry the mood")
+    game.blackout_fade = 0.0
+    check(game.bulb_brightness_at(game.elapsed) == 1.0, "a paid-up bulb burns steady")
+
     # 余额不足：不扣钱、效果不解除
     game.score = 5
     game.pay_bill(0)

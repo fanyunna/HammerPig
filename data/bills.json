@@ -11,8 +11,8 @@
 
   "effects": {
     "blackout": {
-      "hint": "未缴费：桌面照明受限",
-      "darkness_alpha": 0.38,
+      "hint": "未缴费：灯泡接触不良地闪，房间跟着忽明忽暗",
+      "darkness_alpha": 0.22,
       "payment_bonus_duration": 8.0,
       "cooldown_multiplier": 0.9
     },

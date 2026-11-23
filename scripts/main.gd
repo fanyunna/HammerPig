@@ -2574,15 +2574,52 @@ func draw_bill_stack(base: Vector2, count: int) -> void:
 	# 横向再塞一个数字就撞车。待还总额在账本封面和桌上那沓纸上有（「合计 ¥」），不缺这一处。
 
 
-## 电费没缴 = 停电：桌面明显压暗，四周再收一圈暗角。
-## ⚠️ 调用位置是硬要求：必须紧跟 draw_desk()、画在 HUD 和小猪之前。
-## 盖在猪身上会遮挡要打的目标，盖在 UI 上会挡住按钮 —— 两个都不能碰。
-## 只压桌面本身，猪和 UI 仍清晰可见。
+## 电费没缴 = 停电：屋顶灯泡接触不良般地闪，房间的暗度跟着灯泡走。
+## 不再把整屏压得很黑（观感差）：基础暗度从 0.38 降到 0.22，且灯泡蹞亮的瞬间
+## 房间也跟着亮一点 —— 明暗节奏本身就是"快去交电费"的提醒。
 func draw_blackout() -> void:
 	if blackout_fade <= 0.01:
 		return
-	var alpha: float = bills_fx.number("blackout", "darkness_alpha", 0.38) * blackout_fade
+	var b := bulb_brightness()
+	var alpha: float = bills_fx.number("blackout", "darkness_alpha", 0.22) * blackout_fade * (1.0 - 0.5 * b)
 	draw_rect(Rect2(0, 0, 1280, 800), Color(0.02, 0.011, 0.005, alpha))
+
+## 灯泡亮度：纯函数（传入时间），测试可以精确采样不同时刻的明暗档。
+## 缴清 = 恒 1.0；欠费 = 每 0.36 秒一段，段内明暗由确定性伪随机决定，
+## 多数时候很暗、偶尔蹞亮 —— 再叠一点高频抖动，像接触不良。
+func bulb_brightness_at(t: float) -> float:
+	if blackout_fade <= 0.01:
+		return 1.0
+	var seg := floorf(t / 0.36)
+	var r := fposmod(sin(seg * 127.1) * 43758.5453, 1.0)
+	var base := 0.16
+	if r > 0.82:
+		base = 0.85 # 接触不良的"突然来电"
+	elif r > 0.55:
+		base = 0.45
+	var jitter := 0.06 * sin(t * 47.0) + 0.04 * sin(t * 91.3)
+	return clampf(lerpf(1.0, base, blackout_fade) + jitter * blackout_fade, 0.05, 1.0)
+
+func bulb_brightness() -> float:
+	return bulb_brightness_at(elapsed)
+
+## 屋顶吊灯：画在 _draw 最上层（暗化矩形之后）—— 它是光源，不该被自己造成的暗压住。
+## 位置在顶部中央：那里没有 HUD，光晕淡淡溢到信息面板上正好像灯光洒下来。
+func draw_bulb() -> void:
+	var tip := Vector2(640, 74)
+	var center := tip + Vector2(0, 18)
+	var b := bulb_brightness()
+	draw_line(Vector2(640, 0), tip, Color("#2e2620"), 3.0) # 吊线
+	panel(Rect2(628, 72, 24, 16), Color("#8a6a42"), 3) # 灯座
+	if b > 0.03: # 光晕：闪到最暗时只剩一圈残光
+		draw_circle(center, 100.0 * (0.55 + 0.45 * b), Color(1.0, 0.84, 0.52, 0.12 * b))
+		draw_circle(center, 48.0, Color(1.0, 0.88, 0.58, 0.20 * b))
+	var glass := Color(0.30, 0.26, 0.20).lerp(Color(1.0, 0.92, 0.62), b) # 暗时发灰、亮时暖黄
+	draw_circle(center, 15.0, glass)
+	draw_arc(center, 15.0, 0.0, TAU, 24, Color("#4a382a"), 1.5)
+	if b > 0.4: # 亮起来才看得见灯丝
+		draw_line(center + Vector2(-4, 5), center + Vector2(0, -5), Color("#fff3c4"), 1.5)
+		draw_line(center + Vector2(0, -5), center + Vector2(4, 5), Color("#fff3c4"), 1.5)
 
 ## 暗角贴图：中心透明、越靠边越黑，开局生成一次。
 ## 用贴图而不是叠十几层矩形，一帧就两次 draw，加再多猪也不心疼。
@@ -2838,7 +2875,8 @@ func _draw() -> void:
 		draw_bill_detail()
 	draw_collection_flash() # 催收警告：只在屏幕边缘画一圈，不挡任何操作
 	draw_gamble_flip() # 抛硬币的翻面/落定动画，永远盖在最上层
-	draw_blackout() # 电费未缴时覆盖全屏
+	draw_blackout() # 电费未缴：灯泡闪烁、房间随它忽明忽暗
+	draw_bulb() # 灯泡永远画在暗化之上：它是光源，不该被自己造成的暗压住
 	if help_open:
 		draw_rect(Rect2(0, 0, 1280, 800), Color(0, 0, 0, 0.75))
 		panel(Rect2(190, 190, 900, 420), Color("#37251a"), 16)
