@@ -114,15 +114,15 @@ func run() -> void:
     game.strike(game.pigs[0].position)
     check(game.stamina == st_before - float(game.settings.stamina_cost) + float(game.settings.stamina_hit_refund), "hit refunds 1 stamina against its 3 cost")
     check(game.hit_stop > 0.0, "a landed strike freezes the world for a few frames")
-    game.day_events.dice_hand = [10, 11] # 21 点直接摊牌：赢了要记进赌桌战绩
-    game.day_events.dice_dealer = [9, 8]
+    game.day_events.dice_hand.assign([10, 11]) # 21 点直接摊牌：赢了要记进赌桌战绩
+    game.day_events.dice_dealer.assign([9, 8])
     game.day_events.dice_poor = false
     game.day_events.dice_bet = 10
     var gamble_score_before = game.score
     game.day_events._dice_settle()
     check(game.gamble_wins >= 1 and game.score == gamble_score_before + 10, "dice win recorded in session highlights")
-    game.day_events.dice_hand = [10, 5]
-    game.day_events.dice_dealer = [9, 9]
+    game.day_events.dice_hand.assign([10, 5])
+    game.day_events.dice_dealer.assign([9, 9])
     game.day_events.dice_poor = false
     game.day_events.dice_bet = 5
     game.day_events._dice_settle()
@@ -132,19 +132,19 @@ func run() -> void:
     game.gamble_used = true # 隔离：这段专门测卡片，别让桌边那枚硬币插进来
     for i in range(1, 6):
         break_pig(i)
-    check(game.score == 60 and game.phase == "playing", "60 reached but the card waits out the burst")
+    check(game.score == 65 and game.phase == "playing", "60+5 reached but the card waits out the burst（十四轮赌桌块净赚 5）")
     game._process(0.5)
     check(game.phase == "card", "the card pops once the burst has played out")
     game.card_type = "reward"
     game.card_offers.clear() # 走旧奖励兼容分支，避免随机升级影响金额断言
     game.apply_card()
-    check(game.score == 60 + int(game.settings.reward_card_amount) and game.phase == "playing", "reward card pays out and resumes")
+    check(game.score == 65 + int(game.settings.reward_card_amount) and game.phase == "playing", "reward card pays out and resumes")
     game._process(0.9)
 
     # second card -> collect bill
     for i in range(3):
         break_pig(i)
-    check(game.score == 125 and game.phase == "playing", "the second card threshold is crossed")
+    check(game.score == 130 and game.phase == "playing", "the second card threshold is crossed")
     game._process(0.5)
     check(game.phase == "card", "the second card pops after the same beat")
     game.card_type = "collect"
@@ -255,12 +255,12 @@ func run() -> void:
         game.escape.update(0.5) # 3 秒：演出 2.2 秒走完，最后一帧进跑酷
     check(game.escape.state == "run", "the cinematic hands over to the run")
     game.escape.mouse_control = false # 测试不走鼠标：直接看键盘步进与目标高度
+    game.escape.target_y = game.escape._y_max() # 人先站到最下端：只有那里才有往上的空间（无头模式下鼠标跟随会把目标锁在上限）
     var y_start: float = game.escape.target_y
     game.escape.handle_key(KEY_UP)
-    check(game.escape.target_y < y_start, "up arrow lifts the runner")
+    check(game.escape.target_y == y_start - game.escape.KEY_STEP, "up arrow lifts the runner")
     game.escape.handle_key(KEY_DOWN)
-    game.escape.handle_key(KEY_DOWN)
-    check(game.escape.target_y > y_start, "...and down brings him back")
+    check(game.escape.target_y == y_start, "...and down brings him back")
     var lives_before_hit: int = game.dodge_lives
     game.escape.forced_obstacles.assign([{"row": 1, "kind": "bin"}])
     game.escape.spawn_t = 0.0 # 强迫本帧立即生成，免得长跑等待
@@ -355,7 +355,7 @@ func run() -> void:
     check(game.stamina == float(game.settings.stamina_max), "fresh round starts with full stamina")
     var stamina_before: float = game.stamina
     click(game.pigs[0].position)
-    check(game.stamina == stamina_before - float(game.settings.stamina_cost), "a hit costs the base swing stamina")
+    check(game.stamina == stamina_before - float(game.settings.stamina_cost) + float(game.settings.stamina_hit_refund), "a hit costs the base swing stamina (minus its refund)")
     stamina_before = game.stamina
     click(Vector2(100, 300))
     var miss_cost := float(game.settings.stamina_cost) + float(game.settings.stamina_miss_extra)
@@ -889,7 +889,8 @@ func run() -> void:
     game.pending_strike = {"point": game.pigs[1].position, "power": 1.0, "pig": 1}
     game.pending_t = 0.02
     game.cooldown = 5.0
-    game._process(0.05)
+    for i in range(6): # 顿帧会吞头两帧（hit_stop 0.06 > 单帧 0.05）：多跑几帧等它解冻
+        game._process(0.05)
     check(game.pending_strike.is_empty(), "a buffered click that waits too long is dropped")
     game.settings["strike_buffer"] = 0.0
 

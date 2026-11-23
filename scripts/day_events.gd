@@ -692,7 +692,7 @@ func _draw_boss(p, c: Vector2, s: float) -> void:
 	p.draw_circle(c + Vector2(0, -s * 0.62), s * 0.66, Color("#33261a")) # 帽
 	p.draw_circle(c + Vector2(0, -s * 1.1), s * 0.11, Color("#a5432a")) # 帽顶红结
 	p.draw_circle(c, s * 0.72, Color("#e3b489")) # 脸
-	for dx in (-1.0, 1.0):
+	for dx in [-1.0, 1.0]:
 		p.draw_arc(c + Vector2(dx * s * 0.3, -s * 0.08), s * 0.15, 0.35, PI - 0.35, 12, Color("#3a2c20"), 2.5) # 眯眼︶
 	p.draw_line(c + Vector2(-s * 0.1, s * 0.26), c + Vector2(-s * 0.42, s * 0.42), Color("#4a382a"), 3.0) # 八字胡
 	p.draw_line(c + Vector2(s * 0.1, s * 0.26), c + Vector2(s * 0.42, s * 0.42), Color("#4a382a"), 3.0)
@@ -703,7 +703,7 @@ func _draw_pawn_pig(p, c: Vector2, s: float) -> void:
 	var amp := (pawn_bang / 0.35) if pawn_bang > 0.0 else 0.0
 	var cc := c + Vector2(sin(main.elapsed * 42.0) * 5.0 * amp, 0)
 	_ellipse(p, c + Vector2(0, s * 0.5), s * 1.35, s * 0.2, Color("#8a3a2e")) # 红绸垫
-	for dx in (-1.0, 1.0):
+	for dx in [-1.0, 1.0]:
 		p.draw_circle(cc + Vector2(dx * s * 0.55, -s * 0.7), s * 0.22, Color("#d98a8f")) # 耳朵
 	_ellipse(p, cc, s, s * 0.72, Color("#efb0b6")) # 身体
 	p.draw_circle(cc + Vector2(0, s * 0.2), s * 0.34, Color("#f6c6cb")) # 鼻君
@@ -735,7 +735,7 @@ func _draw_pawn_sign(p) -> void:
 
 func _draw_dealer_pig(p, c: Vector2, s: float) -> void:
 	# 赌桌庄家：一头戴遮阳帽檐的黑猪，"押多少，朋友？"
-	for dx in (-1.0, 1.0):
+	for dx in [-1.0, 1.0]:
 		p.draw_circle(c + Vector2(dx * s * 0.62, -s * 0.78), s * 0.26, Color("#3a332c")) # 耳朵
 	p.draw_circle(c, s, Color("#5a5148")) # 头
 	p.draw_circle(c + Vector2(0, s * 0.5), s * 0.44, Color("#6e635a")) # 长哥
