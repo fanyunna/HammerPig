@@ -10,6 +10,7 @@ extends Node
 const PANEL_RECT := Rect2(290, 84, 700, 632)
 const CONFIRM_RECT := Rect2(545, 648, 190, 50) # 结果态的「收下」，与转盘同位
 const SCHEDULE := {2: "pawn", 4: "dice", 6: "calls"} # 天数 → 玩法
+const Pawn3DScript := preload("res://scripts/pawn3d.gd")
 const MAX_PER_RUN := 3
 const GAP_SECONDS := 0.5 # 两场事件之间的最短间隔
 const WARN_SECONDS := 1.8 # 开桌前预警：顶部横幅先喊一嗓子，别让弹窗凭空砸脸
@@ -41,6 +42,7 @@ const CALL_REWARD := 120
 const CALL_FAIL_STAMINA := 45.0
 
 var main # 主游戏节点（main.gd），setup() 注入
+var pawn3d # 当铺 3D 场景视口（settings.pawn_3d 控制；headless 下为 null，自绘作保底）
 var served := 0 # 本局已发的事件数（上限 MAX_PER_RUN）
 var last_day := 0 # 已处理到的日历天数：跨天只发新里程碑，不重发
 var pending: Array[String] = [] # 排队中的事件：一次只放一场，被打断就顺延
@@ -85,6 +87,12 @@ var forced_sequence: Array[int] = [] # 测试专用：非空时直接用它当�
 
 func setup(host) -> void:
 	main = host
+	# 当铺 3D 场景：和 pig3d 同一套做法——透明 SubViewport 贴回画布。
+	# headless 渲染驱动是 dummy（纹理无像素），必须回退 2D 自绘，否则冒烟测试会看不见柜台。
+	if main != null and not DisplayServer.get_name().contains("headless"):
+		if bool(main.settings.get("pawn_3d", true)):
+			pawn3d = Pawn3DScript.new()
+			add_child(pawn3d)
 
 func is_open() -> bool:
 	return active != ""
@@ -560,20 +568,27 @@ func _draw_pawn() -> void:
 		tag = "最后一刀"
 	p.text_center(tag + "：¥" + str(price), cx, 420, 30, Color("#ffe092") if hot else Color("#efbc72"))
 	# —— 场景：柜台后眯眼算价的老板 + 柜台上待价而沽的小猪 ——
-	var counter_y := 548.0
-	_draw_boss(p, Vector2(824, 498) + Vector2(0, dy * 0.4), 34)
-	_draw_pawn_pig(p, Vector2(448, 520) + Vector2(0, dy * 0.6), 44)
-	if pawn_bang > 0.0: # 拍板落锤：锤子从扬起到砸下
-		_draw_mallet(p, Vector2(520, 452), pawn_bang / 0.35)
-	if pawn_state == "result": # 成交：柜台上滚出一把铜钱
-		for i in range(4):
-			var coin := Vector2(566 + 27 * i, counter_y - 10 - (i % 2) * 7)
-			p.draw_circle(coin, 11, Color("#d9a94a"))
-			p.draw_circle(coin, 5, Color("#543823"))
-	# 柜台最后画：正好挡住老板的身子和小猪垫子的底
-	p.panel(Rect2(310, counter_y, 660, 18), Color("#7a5433"), 3)
-	p.panel(Rect2(310, counter_y + 18, 660, 64), Color("#543823"), 0)
-	p.draw_line(Vector2(310, counter_y + 18), Vector2(970, counter_y + 18), Color("#3a2c20"), 2.0)
+	var scene_rect := Rect2(300, 446, 680, 268)
+	if pawn3d != null: # 3D 场景层：老板/小猪/木槌/铜钱全在里面，价格条与按钮仍是 2D 叠在上面
+		pawn3d.set_state(pawn_state, pawn_bang)
+		p.draw_texture_rect(pawn3d.get_texture(), scene_rect, false)
+	else:
+		var counter_y := 548.0
+		_draw_boss(p, Vector2(824, 498) + Vector2(0, dy * 0.4), 34)
+		_draw_pawn_pig(p, Vector2(448, 520) + Vector2(0, dy * 0.6), 44)
+		if pawn_bang > 0.0: # 拍板落锤：锤子从扬起到砸下
+			_draw_mallet(p, Vector2(520, 452), pawn_bang / 0.35)
+		if pawn_state == "result": # 成交：柜台上滚出一把铜钱
+			for i in range(4):
+				var coin := Vector2(566 + 27 * i, counter_y - 10 - (i % 2) * 7)
+				p.draw_circle(coin, 11, Color("#d9a94a"))
+				p.draw_circle(coin, 5, Color("#543823"))
+		# 柜台最后画：正好挡住老板的身子和小猪垫子的底
+		p.panel(Rect2(310, counter_y, 660, 18), Color("#7a5433"), 3)
+		p.panel(Rect2(310, counter_y + 18, 660, 64), Color("#543823"), 0)
+		p.draw_line(Vector2(310, counter_y + 18), Vector2(970, counter_y + 18), Color("#3a2c20"), 2.0)
+	if pawn3d != null: # 3D 场景作底时，给提示文字垫一条半透明底，避免压在木纹上看不清
+		p.panel(Rect2(cx - 250, 448, 500, 26), Color(0.08, 0.05, 0.03, 0.62), 8)
 	match pawn_state:
 		"ready":
 			p.text_center("老板已就位 —— 点「开砍！」或按空格，指针摆起来后再点面板下刀", cx, 470, 15, Color("#b59a7c"))
