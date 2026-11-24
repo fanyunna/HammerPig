@@ -632,37 +632,49 @@ func _call_offset(i: int, ringing: bool) -> Vector2:
 
 
 func _draw_call_phone(p, base: Vector2, num: int, ringing: bool, done: bool) -> void:
-	## 一台真正的老式转盘电话机。响铃时整台跳起来：起跳拉长、落地压扁（卡通跳法），
-	## 挂断后听筒搁在一旁、机身变暗 —— 一眼能读出"哪些还没挂"。
+	## 复古转盘电话（棕木色）：宽底座 + 金字塔机身 + 正面大转盘 + 顶架听筒。
+	## 响铃时整台跳起来：起跳拉长、落地压扁（卡通跳法），挂断后听筒搁在一旁、机身变暗。
 	var ph: float = main.elapsed * 9.0 + float(num - 1) * 1.3
 	var hop: float = absf(sin(ph)) * 20.0 if ringing else 0.0
 	var st: float = 0.12 * sin(ph) if ringing else 0.0 # 拉长(+) / 压扁(-)
 	var cc: Vector2 = base + _call_offset(num - 1, ringing)
 	# 影子留在地上：跳得越高影子越小
-	var sh_rx: float = 52.0 * (1.0 - 0.45 * hop / 20.0)
-	_ellipse(p, base + Vector2(0, 5), sh_rx, 9.0, Color(0.05, 0.03, 0.02, 0.4))
-	var body := Color("#4a3524") if not done else Color("#33271b")
-	var face := Color("#5a4128") if not done else Color("#3d2e20")
-	var dark := Color("#2e2118") if not done else Color("#221a12")
-	var brass := Color("#8a6a42") if not done else Color("#5a4a34")
+	var sh_rx: float = 56.0 * (1.0 - 0.45 * hop / 20.0)
+	_ellipse(p, base + Vector2(0, 8), sh_rx, 10.0, Color(0.05, 0.03, 0.02, 0.4))
+	var body := Color("#5f4227") if not done else Color("#41301d")
+	var face := Color("#6d4d2e") if not done else Color("#4a3722")
+	var dark := Color("#3a2817") if not done else Color("#2a1e12")
+	var dial := Color("#2b1d10") if not done else Color("#1f150b")
+	var brass := Color("#b58c54") if not done else Color("#6e5638")
 	# 以落点为原点缩放：跳起时拉长、落地压扁
 	p.draw_set_transform_matrix(Transform2D(0.0, cc) * Transform2D(0.0, Vector2(1.0 - st * 0.6, 1.0 + st)))
-	p.panel(Rect2(-46, -26, 92, 30), body, 10) # 机座
-	p.panel(Rect2(-38, -34, 76, 14), face, 7) # 顶面
-	p.draw_circle(Vector2(0, -13), 10.5, dark) # 拨号盘
-	p.draw_arc(Vector2(0, -13), 10.5, 0.0, TAU, 24, brass, 1.6)
-	for k in range(6):
-		var a := -PI * 0.85 + PI * 0.7 * (float(k) / 5.0)
-		p.draw_circle(Vector2(0, -13) + Vector2(cos(a), sin(a)) * 6.2, 1.7, brass)
-	p.panel(Rect2(-42, -22, 22, 13), Color("#1c130b"), 4) # 号码铜牌
-	p.text_center(str(num), -31, -12.5, 11, Color("#ffe092") if not done else Color("#554636"))
+	# 底座：宽垫脚 + 金字塔机身（下宽上窄）
+	p.panel(Rect2(-52, -2, 104, 12), dark, 6)
+	p.draw_colored_polygon(PackedVector2Array([Vector2(-46, -2), Vector2(46, -2), Vector2(32, -32), Vector2(-32, -32)]), body)
+	# 顶架平台 + 两个听筒挂钩
+	p.panel(Rect2(-30, -40, 60, 9), face, 4)
+	p.panel(Rect2(-28, -48, 9, 12), dark, 3)
+	p.panel(Rect2(19, -48, 9, 12), dark, 3)
+	# 正面转盘：大圆盘 + 十个指孔 + 中心号码牌
+	var dc := Vector2(0, -15)
+	p.draw_circle(dc, 16.5, dial)
+	p.draw_arc(dc, 16.5, 0.0, TAU, 32, brass, 1.6)
+	for k in range(10):
+		var a := TAU * float(k) / 10.0 + 0.31
+		p.draw_circle(dc + Vector2(cos(a), sin(a)) * 11.0, 2.1, brass)
+	p.draw_circle(dc, 5.5, face)
+	p.draw_arc(dc, 5.5, 0.0, TAU, 16, brass, 1.2)
+	p.text_center(str(num), dc.x, dc.y + 2.5, 8, Color("#ffe092") if not done else Color("#6e5638"))
+	# 左侧卷卷的电话线
+	for k in range(3):
+		p.draw_arc(Vector2(-56, -8.0 + float(k) * 5.5), 4.5, 0.0, TAU, 12, brass, 1.6)
 	if done:
-		_draw_handset(p, Vector2(66, -2), 18, dark) # 挂断：听筒搁在旁边地上
+		_draw_handset_on(p, Vector2(64, -6), 22, dark) # 挂断：听筒搁在旁边地上
 	else:
-		_draw_handset(p, Vector2(0, -44), 20, Color("#543823"))
+		_draw_handset_on(p, Vector2(0, -54), 26, body) # 架在挂钩上的听筒
 		if ringing:
 			var lit := 0.55 + 0.4 * sin(main.elapsed * 10.0)
-			p.draw_circle(Vector2(-38, -40), 4.0, Color(0.9, 0.32, 0.25, lit)) # 呼叫红灯
+			p.draw_circle(Vector2(-34, -22), 3.5, Color(0.9, 0.32, 0.25, lit)) # 呼叫红灯
 	p.draw_set_transform_matrix(Transform2D())
 
 func _draw_calls() -> void:
@@ -785,22 +797,31 @@ func _draw_dealer_pig(p, c: Vector2, s: float) -> void:
 	p.draw_rect(Rect2(c.x - s * 0.95, c.y - s * 0.62, s * 1.9, s * 0.2), Color("#2e523b")) # 帽檐
 	p.draw_rect(Rect2(c.x - s * 0.5, c.y - s * 0.98, s, s * 0.42), Color("#2e523b")) # 帽顶
 
-func _draw_handset(p, c: Vector2, s: float, col: Color) -> void:
-	# 老式听筒：两端圆头 + 向下垂的弧形弓身
-	p.draw_circle(c + Vector2(-s * 0.85, -s * 0.5), s * 0.3, col)
-	p.draw_circle(c + Vector2(s * 0.85, -s * 0.5), s * 0.3, col)
-	p.draw_arc(c + Vector2(0, -s * 0.3), s * 0.9, 0.25, PI - 0.25, 16, col, s * 0.26)
+func _draw_handset_on(p, c: Vector2, s: float, col: Color) -> void:
+	# 架在挂钩上的听筒：两只圆头朝下扣进架座，弓身向上拱起（老式电话的驾法）
+	p.draw_circle(c + Vector2(-s * 0.85, 0), s * 0.32, col)
+	p.draw_circle(c + Vector2(s * 0.85, 0), s * 0.32, col)
+	p.draw_arc(c, s * 0.85, PI + 0.45, TAU - 0.45, 20, col, s * 0.3)
 
 func _draw_phone(p, c: Vector2) -> void:
-	# 桌角的老式转盘电话机：通话时机身发抖、呼叫红灯闪
+	# 桌角的老式转盘电话机（棕木色，和催债关里四台同款）：通话时机身发抖、红灯闪
 	var shaking: bool = calls_state == "memo" or calls_state == "play"
 	var cc := c + (Vector2(sin(main.elapsed * 32.0) * 2.5, 0) if shaking else Vector2.ZERO)
-	p.draw_arc(cc + Vector2(78, 8), 12.0, 0.0, TAU, 20, Color("#8a6a42"), 2.0) # 卷卷的电话线
-	p.draw_arc(cc + Vector2(78, 8), 6.0, 0.0, TAU, 16, Color("#8a6a42"), 2.0)
-	p.panel(Rect2(cc.x - 62, cc.y - 8, 124, 34), Color("#3a2c20"), 6) # 机座
-	p.draw_circle(cc + Vector2(0, 9), 11, Color("#241a10")) # 拨号盘
-	p.draw_arc(cc + Vector2(0, 9), 11, 0.0, TAU, 20, Color("#8a6a42"), 1.5)
-	_draw_handset(p, cc + Vector2(0, -24), 20, Color("#543823")) # 搁在座上的听筒
+	var body := Color("#5f4227")
+	var face := Color("#6d4d2e")
+	var dark := Color("#3a2817")
+	var brass := Color("#b58c54")
+	p.panel(Rect2(cc.x - 44, cc.y + 2, 88, 10), dark, 5) # 垫脚
+	p.draw_colored_polygon(PackedVector2Array([Vector2(cc.x - 38, cc.y + 2), Vector2(cc.x + 38, cc.y + 2), Vector2(cc.x + 26, cc.y - 26), Vector2(cc.x - 26, cc.y - 26)]), body) # 金字塔机身
+	p.panel(Rect2(cc.x - 24, cc.y - 33, 48, 8), face, 4) # 顶架
+	var dc := cc + Vector2(0, -11)
+	p.draw_circle(dc, 13, Color("#2b1d10"))
+	p.draw_arc(dc, 13, 0.0, TAU, 24, brass, 1.4)
+	for k in range(10):
+		var a := TAU * float(k) / 10.0 + 0.31
+		p.draw_circle(dc + Vector2(cos(a), sin(a)) * 8.6, 1.7, brass)
+	_draw_handset_on(p, cc + Vector2(0, -40), 20, body)
+	p.draw_arc(cc + Vector2(-52, 2), 5.5, 0.0, TAU, 14, brass, 1.8) # 卷卷的电话线
 	if calls_state != "result" or not calls_win:
 		var lit := 0.55 + 0.4 * sin(main.elapsed * 10.0)
-		p.draw_circle(cc + Vector2(-44, -32), 5.0, Color(0.9, 0.32, 0.25, lit)) # 呼叫红灯
+		p.draw_circle(cc + Vector2(-24, -16), 3.2, Color(0.9, 0.32, 0.25, lit)) # 呼叫红灯
