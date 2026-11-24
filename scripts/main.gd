@@ -19,6 +19,7 @@ const UPGRADE_CARD_RECTS := [Rect2(150, 270, 290, 300), Rect2(495, 270, 290, 300
 const CONTINUE_RECT := Rect2(535, 563, 210, 52)
 const LEGACY_SHOP_RECT := Rect2(400, 563, 120, 52) # 结算面板上的「传承商店」按钮（在再来一轮左边）
 const INTRO_SHOP_RECT := Rect2(116, 586, 234, 44) # 序幕上的入口（在「任意键开始」下方）
+const STORY_SKIP_RECT := Rect2(1088, 44, 108, 40) # 剧情对话页右上「跳过剧情」
 const LEGACY_PANEL := Rect2(240, 80, 800, 584) # 传承商店全屏面板
 const LEGACY_CLOSE_RECT := Rect2(585, 600, 110, 40) # 商店关闭按钮（鼠标玩家的出口；键盘 B/Esc 也行）
 const INTRO_RECT := Rect2(112, 476, 234, 52) # 开场序幕的「敲开第一只」按钮
@@ -73,6 +74,12 @@ var gamble_heads := true # 这一抛是正面还是反面
 var gamble_used := false # 本局是否已经赌过（赌过就没了；不赌的话硬币一直在桌上等着）
 var unpaid_bills := 7 # = bills.size()：应付掉一张 -1，逾期 +1（越欠越多）
 var intro_open := false # 开场序幕是否正在显示（headless 下自动关掉，免得挡住自动化测试）
+var story_page := 0 # 剧情对话页码：< 页数在放对话，>= 页数就是标题页
+var story_t := 0.0 # 剧情打字机计时（翻页归零）
+var tutorial_step := 0 # 新手引导：0 未启动 1 瞄准 2 蓄力砸 3 收尾横幅 4 完成/跳过
+var tutorial_t := 0.0 # 收尾横幅计时
+var tutorial_gain := 0 # 第一只猪的收入：收尾横幅展示用
+var tutorial_done := false # 存档位：教学只带第一次，之后直接开打
 var pigs: Array[Dictionary] = []
 var particles: Array[Dictionary] = []
 var popups: Array[Dictionary] = []
@@ -242,6 +249,8 @@ func _ready() -> void:
 	_load_art_textures() # 美术贴图：读不到的键不进字典，绘制处自动回退 3D 图元 / 2D 自绘
 	# 开场序幕：headless 下关掉，否则自动化测试第一下点击会被序幕吃掉
 	intro_open = bool(story.get("intro_enabled", true)) and not DisplayServer.get_name().contains("headless")
+	var intro_pages: Array = story.get("pages", [])
+	story_page = 0 if (intro_open and not intro_pages.is_empty()) else intro_pages.size() # 有剧情先放对话，没剧情直接标题页
 	sync_cursor() # 开场是序幕，这里应该是系统箭头：点「敲开第一只」要看得见自己在点什么
 	# 3D 猪：headless（dummy 渲染驱动）下没有真实像素，自动回退 2D 自绘
 	use_3d = bool(settings.get("pig_3d", true)) and not DisplayServer.get_name().contains("headless")
@@ -484,6 +493,7 @@ func load_meta() -> void:
 	var shop: Variant = cfg.get_value("meta", "shop", {})
 	if shop is Dictionary:
 		meta_shop = shop
+	tutorial_done = bool(cfg.get_value("meta", "tutorial_done", false))
 
 
 func save_meta() -> void:
@@ -495,6 +505,7 @@ func save_meta() -> void:
 	cfg.set_value("meta", "runs", meta_runs)
 	cfg.set_value("meta", "unlocked", meta_unlocked)
 	cfg.set_value("meta", "shop", meta_shop)
+	cfg.set_value("meta", "tutorial_done", tutorial_done)
 	cfg.save(META_PATH)
 
 
@@ -1269,6 +1280,19 @@ func _process(delta: float) -> void:
 	if shop != null:
 		shop.tick(delta) # 技能冷却/buff 计时只在游戏运行时走，面板打开时上面已 return
 	elapsed += delta
+	story_t += delta # 剧情打字机：翻页时归零，出全文后停走也无所谓（截断在绘制层做）
+	if tutorial_step == 1: # 瞄准步骤：光标进圈就教下一步（蓄力）
+		var tgt: Dictionary = _tutorial_target()
+		if tgt.is_empty():
+			tutorial_step = 0 # 桌上没猪了：直接放手让玩家自己玩
+		elif get_global_mouse_position().distance_to(tgt.position) <= pig_size() * 0.5 + 24.0:
+			tutorial_step = 2
+	elif tutorial_step == 3: # 第一只猪已碎：横幅停留几秒收掉，记进存档
+		tutorial_t += delta
+		if tutorial_t > 3.2:
+			tutorial_step = 4
+			tutorial_done = true
+			save_meta()
 	stun_t = maxf(0.0, stun_t - delta) # 重力锤落地硬直：时间到了才能再挥
 	if hit_stop > 0.0: # 打击顿帧：命中瞬间全场定格几帧 —— 冷却/猪/计时全停，只留给眼睛
 		hit_stop = maxf(0.0, hit_stop - delta)
@@ -1427,17 +1451,38 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 			legacy_shop_click(get_global_mouse_position())
 		return
-	if intro_open: # 序幕期间吞掉一切输入：点按钮或按任意键都只是「开始」（商店按钮除外）
+	if intro_open: # 序幕期间吞掉一切输入：剧情页点击翻页，标题页才开始（商店按钮除外）
+		var intro_pages: Array = story.get("pages", [])
 		if event is InputEventMouseButton:
 			if event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-				if INTRO_SHOP_RECT.has_point(get_global_mouse_position()):
+				var mp := get_global_mouse_position()
+				if story_page < intro_pages.size(): # 剧情对话：跳过 / 快进 / 翻页
+					if STORY_SKIP_RECT.has_point(mp):
+						story_page = intro_pages.size()
+					elif int(story_t * 24.0) < _story_page_len(intro_pages[story_page]):
+						story_t = 999.0 # 打字机没放完：第一下先出全文
+					else:
+						story_page += 1
+						story_t = 0.0
+					Sound.play("click")
+				elif INTRO_SHOP_RECT.has_point(mp):
 					shop_open = true
 					Sound.play("click")
-					queue_redraw()
 				else:
 					intro_open = false
+					_start_tutorial()
+				queue_redraw()
 		elif event is InputEventKey and event.pressed and not event.echo:
-			intro_open = false
+			if story_page < intro_pages.size():
+				if int(story_t * 24.0) < _story_page_len(intro_pages[story_page]):
+					story_t = 999.0
+				else:
+					story_page += 1
+					story_t = 0.0
+			else:
+				intro_open = false
+				_start_tutorial()
+			queue_redraw()
 		return
 	if wheel != null and wheel.is_open(): # 转盘弹窗期间：只认「确认」（点击或空格/回车），其余一律吞掉
 		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
@@ -1484,6 +1529,12 @@ func _unhandled_input(event: InputEvent) -> void:
 					queue_redraw()
 					return
 	if event is InputEventKey and event.pressed and not event.echo:
+		if tutorial_step in [1, 2, 3] and event.keycode == KEY_ESCAPE: # 教学随时可跳：不把老玩家按在教程里
+			tutorial_step = 4
+			tutorial_done = true
+			save_meta()
+			queue_redraw()
+			return
 		if phase == "playing" and shop != null and not bill_open and bill_detail < 0 and not help_open and not build.panel_open:
 			# 道具商店的三个入口：商店/背包/快捷栏技能。只在真正的游玩阶段生效，不抢其他界面的键
 			if event.keycode == KEY_T:
@@ -2076,6 +2127,10 @@ func settle_card_break(pig: Dictionary, secondary: bool) -> void:
 			gain = roundi(float(gain) * shop.score_mul())
 		score += gain
 	broken += 1
+	if tutorial_step == 2: # 新手引导：第一只猪碎了，收尾横幅展示入账金额
+		tutorial_step = 3
+		tutorial_t = 0.0
+		tutorial_gain = gain
 	build.progress("hunter", self) # 连锁击碎同样计入猎猪执照
 	spawn_particles(pig.position, kind, gain)
 	var pcolor := Color("#ffe092")
@@ -3130,6 +3185,10 @@ func draw_watchers() -> void:
 
 ## 开场序幕：交代「欠了一屁股债 + 只能敲存钱罐 + 停不下来」
 func draw_intro() -> void:
+	var intro_pages: Array = story.get("pages", [])
+	if story_page < intro_pages.size(): # 剧情对话页：讲完才见标题
+		_draw_story_page(intro_pages[story_page])
+		return
 	draw_polygon(
 		PackedVector2Array([Vector2.ZERO, Vector2(1280, 0), Vector2(1280, 800), Vector2(0, 800)]),
 		PackedColorArray([Color("#24160f"), Color("#38241888"), Color("#2d1b12cf"), Color("#24160f")]))
@@ -3172,6 +3231,96 @@ func draw_cover_texture(texture: Texture2D, center: Vector2, longest_side: float
 	var texture_size := texture.get_size()
 	var cover_size := texture_size * (longest_side / maxf(texture_size.x, texture_size.y))
 	draw_texture_rect(texture, Rect2(center - cover_size * 0.5, cover_size), false)
+
+
+## ── 开场小剧情 + 新手引导 ────────────────────────────────────────────
+## 老师反馈「别人直接玩不知道怎么玩」：序幕升级成对话式剧情（打字机 + 翻页 + 跳过），
+## 进游戏后再用一条不打断操作的引导把「瞄准 → 蓄力 → 砸碎 → 入账」演一遍。
+## 剧情文案在 data/story.json 的 pages；引导文案在 tutorial。存档记 tutorial_done 只教第一次。
+
+func _story_page_len(page: Dictionary) -> int:
+	return String(page.get("text", "")).length()
+
+
+func _start_tutorial() -> void:
+	# 从标题页进入游戏时启动。存档记 tutorial_done：只带第一次，之后直接开打
+	if tutorial_done or not bool(story.get("intro_enabled", true)):
+		return
+	var tut: Dictionary = story.get("tutorial", {})
+	if tut.is_empty():
+		return
+	tutorial_step = 1
+
+
+func _tutorial_target() -> Dictionary:
+	# 教学目标：挑离桌面中心最近、还活着的猪。碎了/被带走了就自动换目标
+	var best: Dictionary = {}
+	var best_d := 1e12
+	for pig in pigs:
+		if int(pig.hp) <= 0 or float(pig.respawn) > 0.0:
+			continue
+		var d: float = pig.position.distance_to(Vector2(640, 430))
+		if d < best_d:
+			best_d = d
+			best = pig
+	return best
+
+
+func _draw_story_page(page: Dictionary) -> void:
+	# 剧情对话页：暗底 + 说话人名牌 + 打字机正文 + 页点 + 跳过按钮
+	draw_polygon(
+		PackedVector2Array([Vector2.ZERO, Vector2(1280, 0), Vector2(1280, 800), Vector2(0, 800)]),
+		PackedColorArray([Color("#24160f"), Color("#38241888"), Color("#2d1b12cf"), Color("#24160f")]))
+	draw_rect(Rect2(48, 46, 1184, 708), Color("#be874d"), false, 2.0)
+	var body := String(page.get("text", ""))
+	var shown: String = body.substr(0, int(story_t * 24.0))
+	panel(Rect2(140, 470, 1000, 220), Color("#2a1a10"), 18)
+	draw_rect(Rect2(140, 470, 1000, 220), Color("#be874d"), false, 2.0)
+	var who := String(page.get("who", ""))
+	panel(Rect2(172, 444, 46.0 + who.length() * 21.0, 46), Color("#8c4637"), 10)
+	text_at(who, Vector2(196, 472), 20, Color("#ffe2a1"))
+	text_wrap_center(shown, 640, 585, 25, 880, Color("#f4e0b8"))
+	var intro_pages: Array = story.get("pages", [])
+	for i in range(intro_pages.size()):
+		draw_circle(Vector2(618 + i * 28, 662), 5.0, Color("#ffe2a1") if i == story_page else Color("#6b4a2e"))
+	if int(story_t * 24.0) >= body.length():
+		var blink := 0.55 + 0.45 * sin(elapsed * 5.0)
+		text_at("点击继续 ▸", Vector2(1000, 664), 17, Color(0.95, 0.86, 0.66, blink))
+	button(STORY_SKIP_RECT, "跳过剧情")
+
+
+func _draw_tutorial() -> void:
+	# 游戏内新手引导：只在真正游玩、且没有模态界面压顶时出现
+	if tutorial_step <= 0 or tutorial_step >= 4 or phase != "playing":
+		return
+	if bill_open or bill_detail >= 0 or help_open or build.panel_open or shop_open or day_events.is_open() or (shop != null and shop.is_open()):
+		return
+	var tut: Dictionary = story.get("tutorial", {})
+	if tut.is_empty():
+		return
+	if tutorial_step <= 2:
+		var tgt: Dictionary = _tutorial_target()
+		if tgt.is_empty():
+			return
+		var pulse := 0.5 + 0.5 * sin(elapsed * 4.0)
+		var r := pig_size() * 0.5 + 14.0 + 6.0 * pulse
+		draw_arc(tgt.position, r, 0, TAU, 48, Color(1.0, 0.9, 0.4, 0.85), 4.0)
+		draw_arc(tgt.position, r + 10.0, 0, TAU, 48, Color(1.0, 0.9, 0.4, 0.3 + 0.2 * pulse), 2.0)
+		var label := String(tut.get("aim", "移动鼠标，瞄准这只猪")) if tutorial_step == 1 else String(tut.get("charge", "按住左键蓄力，松手砸碎它！"))
+		_tutorial_banner(label)
+		text_center(String(tut.get("skip_hint", "Esc 跳过教学")), 640, 766, 14, Color(1, 1, 1, 0.55))
+	else:
+		var alpha := clampf(1.0 - (tutorial_t - 2.2) / 1.0, 0.0, 1.0)
+		_tutorial_banner(String(tut.get("done", "金币入账！继续敲，攒钱还债")) + "　+" + str(tutorial_gain) + " 金币", alpha)
+
+
+func _tutorial_banner(label: String, alpha := 1.0) -> void:
+	# 顶部教学横幅：半透明黑底金边，不挡操作
+	var w := 620.0
+	var rect := Rect2(640 - w * 0.5, 92, w, 56)
+	panel(rect, Color(0.10, 0.06, 0.03, 0.82 * alpha), 14)
+	draw_rect(rect, Color(0.91, 0.72, 0.4, 0.55 * alpha), false, 2.0)
+	text_wrap_center(label, 640, rect.position.y + 28.0, 21, w - 70.0, Color(1, 0.94, 0.78, alpha))
 
 
 func _draw() -> void:
@@ -3295,8 +3444,9 @@ func _draw() -> void:
 	draw_collection_flash() # 催收警告：只在屏幕边缘画一圈，不挡任何操作
 	draw_gamble_flip() # 抛硬币的翻面/落定动画，永远盖在最上层
 	if not (bill_open or bill_detail >= 0): # 翻账单时吊灯和预告横幅都让位：账单是模态的
-		draw_challenge_warning() # 考核预告横幅：压在暗化之上，断电时也看得见"考核要来了"
+		draw_challenge_warning() # 考核预告横幅：压在暗化之上，断电时也看得见“考核要来了”
 		draw_bulb() # 灯泡永远画在暗化之上：它是光源，不该被自己造成的暗压住
+	_draw_tutorial() # 新手引导画在灯泡之后：教学横幅不能被吊灯灯泡盖住字
 	if help_open:
 		draw_rect(Rect2(0, 0, 1280, 800), Color(0, 0, 0, 0.75))
 		panel(Rect2(190, 190, 900, 420), Color("#37251a"), 16)
