@@ -12,7 +12,7 @@ class_name Desk3D
 const VIEW_W := 1280.0
 const VIEW_H := 800.0
 const FOV := 30.0 # 透视视野（度）：越小越像长焦、越"远"（30° 比 38° 的近端放大温和）
-const PITCH := 1.047 # 俯角 60°：从上往下看桌面，同时保留猪和锤击的立体感
+const PITCH := 1.309 # 俯角 75°：接近垂直俯视（原版实测硬币椭圆比 ≈0.95 → 72-78°），保留一点立体感
 static var pitch_override := 0.0 # 调试用：>0 时覆盖 PITCH（截图脚本拿它跑多角度对照原版）
 const CAM_DIST := 16.0 # 相机到原点的距离（配合长焦，减小透视夸张）
 const DESK_THICK := 0.34
@@ -209,15 +209,16 @@ func _build_scene() -> void:
 	floor_node.rotation.x = -PI / 2.0
 	floor_node.position.y = FLOOR_Y
 	var fm := StandardMaterial3D.new()
-	fm.albedo_color = Color("#231712") # 酒馆地板：暗暖棕
+	fm.albedo_color = Color("#120b07") # 酒馆地板：压到近黑，和高亮木桌拉开对比（原版式构图）
 	fm.roughness = 0.9
 	floor_node.material_override = fm
 	add_child(floor_node)
 
-	# 桌板尺寸：参考原版《账单必须支付》——桌面铺满画面（桌沿压到屏幕边缘之外），
-	# 猪活动区只是桌面上的一块区域；装饰仍按猪活动区反算，留在画面内。
-	var frame := _desk_frame(Rect2(Vector2.ZERO, Vector2(VIEW_W, VIEW_H)).grow(-6.0))
-	var inner := _desk_frame(_pen_rect.grow(76.0)) # 76 ≈ 猪半径 69 + 一点桌沿余量
+	# 桌板尺寸：参考原版《账单必须支付》——桌面占画面中部，四周留空隙：
+	# 顶部露背景带（货架/墙），底部露地板带（玩家站位），左右各露一点桌沿外。
+	var area := Rect2(45.0, 120.0, VIEW_W - 90.0, VIEW_H - 160.0)
+	var frame := _desk_frame(area) # 桌板本体
+	var inner := _desk_frame(_pen_rect.grow(76.0)) # 76 ≈ 猪半径 69 + 一点桌沿余量（装饰用）
 	var desk_w: float = frame.w
 	var desk_d: float = frame.d
 	var desk_cz: float = frame.cz

@@ -39,7 +39,7 @@ func _build_scene() -> void:
 	var cam := Camera3D.new()
 	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
 	cam.size = 2.9
-	cam.position = Vector3(0.0, 4.7, 3.0) # 约 58° 俯视：从玩家敲击方向看见猪背、鼻子和投币口
+	cam.position = Vector3(0.0, 4.7, 1.55) # 约 72° 俯视：对齐桌面 75° 俯角（原版风格，看到背与投币口为主）
 	cam.look_at_from_position(cam.position, Vector3(0.0, 0.08, 0.0))
 	cam.current = true
 	add_child(cam)
