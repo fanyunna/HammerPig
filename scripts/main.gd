@@ -122,6 +122,9 @@ var bonus_timer := 0.0 # 支付电费后的挥锤冷却减免还剩多久
 var blackout_fade := 0.0 # 停电暗化的渐入进度（0→1，避免闪进闪出）
 var collection_flash := 0.0 # 房东催收的红色警告脉冲
 var hammer_position := Vector2(1030, 540)
+## 命中点相对锤头中心的偏移：锤头画在鼠标处，真正的判定点在锤头左下的击打面上。
+## 准心画在判定点 —— 指哪打哪；锤头悬在命中点的右上，视觉上正要砸下去。
+const AIM_OFFSET := Vector2(-42, 38)
 var card_type := "" # "reward" / "double" / "collect" / "dodge"
 var card_offers: Array[Dictionary] = [] # 三选一卡片：本局升级与即时奖励
 var hammer_damage_bonus := 0
@@ -1518,7 +1521,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			charge_t = 0.0
 			if phase == "playing" and not bill_open and bill_detail < 0 \
 					and not help_open and not build.panel_open and gamble_state != "flip" and gamble_state != "result":
-				strike_release(get_global_mouse_position(), 1.0 + pow(ratio, 1.6) * CHARGE_POWER)
+				strike_release(get_global_mouse_position() + AIM_OFFSET, 1.0 + pow(ratio, 1.6) * CHARGE_POWER)
 		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		var point := get_global_mouse_position()
@@ -1600,7 +1603,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			# 同时锁下这一刻瞄准的猪：按住的几百毫秒里它会走开，但"我要砸它"的意图没变。
 			charging = true
 			charge_t = 0.0
-			charge_pig = pig_index(strike_target(point))
+			charge_pig = pig_index(strike_target(point + AIM_OFFSET)) # 按下那一刻瞄的是准心处的猪
 
 func end_round_exhausted() -> void:
 	# 体力见底：本轮结束（不是破产，余额保留，R 重开）
@@ -1790,7 +1793,7 @@ func strike(point: Vector2, power := 1.0) -> void:
 		popups.append({"position": point + Vector2(-30, -40), "life": 0.7, "text": "体力不足"})
 		end_round_exhausted()
 		return
-	hammer_position = point
+	hammer_position = point - AIM_OFFSET # 锤头悬在命中点的右上（AIM_OFFSET 的反方向）
 	swing = 0.16
 	cooldown = build.cooldown(self) # 卡片2.0：过载引擎/狂战士/赊账/马刺的冷却修正都算在里面
 	stamina -= cost
@@ -3401,12 +3404,13 @@ func ui_hover_at(p: Vector2) -> bool:
 
 
 func _draw_aim_reticle() -> void:
-	# 准心画在锤子之上：锤头现在正对命中点，画在下面会被木头盖住
+	# 准心画在锤子左下的击打面处（= 真正的命中判定点），且画在锤子之上才看得见
 	if phase != "playing" or ui_hover_at(hammer_position):
 		return
-	var aim_color := Color("#ffe092") if not strike_target(hammer_position).is_empty() else Color(1, 1, 1, 0.65)
-	draw_arc(hammer_position, 7.0, 0.0, TAU, 24, aim_color, 1.5, true)
-	draw_circle(hammer_position, 2.0, aim_color)
+	var aim := hammer_position + AIM_OFFSET
+	var aim_color := Color("#ffe092") if not strike_target(aim).is_empty() else Color(1, 1, 1, 0.65)
+	draw_arc(aim, 7.0, 0.0, TAU, 24, aim_color, 1.5, true)
+	draw_circle(aim, 2.0, aim_color)
 
 
 func draw_hammer() -> void:
