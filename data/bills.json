@@ -24,7 +24,7 @@
     },
     "collection": {
       "hint": "未交租：房东会定期上门催收",
-      "progress_threshold": 100,
+      "progress_threshold": 350,
       "max_triggers_per_run": 3,
       "cooldown_seconds": 45,
       "dodge_delay_days": 2,

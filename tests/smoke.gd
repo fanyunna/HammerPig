@@ -726,19 +726,19 @@ func run() -> void:
     check(_interest_count() == 0, "paying the card voids its own interest")
     check(_count_named("滞纳金") == late_before, "...without touching late fees")
 
-    # 房租催收：跨阈值触发，冷却与每局上限都生效
+    # 房租催收：跨阈值触发，冷却与每局上限都生效（阈值从配置读，调 json 不用改测试）
+    var th: float = game.bills_fx.number("collection", "progress_threshold", 100.0)
     var visits: Dictionary = {"n": 0}
     game.bills_fx.collection_triggered.connect(func(_t: String) -> void: visits.n += 1)
-    game.bills_fx.update_collection(0.1, 100.0)
+    game.bills_fx.update_collection(0.1, th)
     check(visits.n == 1, "crossing the income threshold brings the landlord")
-    game.bills_fx.update_collection(0.1, 150.0)
+    game.bills_fx.update_collection(0.1, th + 50.0)
     check(visits.n == 1, "the landlord respects his cooldown")
-    game.bills_fx.update_collection(60.0, 320.0)
+    game.bills_fx.update_collection(60.0, th * 2.0 + 20.0)
     check(visits.n == 2, "...and comes back once the cooldown is over")
-    game.bills_fx.update_collection(60.0, 620.0)
+    game.bills_fx.update_collection(60.0, th * 3.0 + 20.0)
     check(visits.n == 3, "still coming while the rent stays unpaid")
-    game.bills_fx.update_collection(60.0, 900.0)
-    game.bills_fx.update_collection(60.0, 1200.0)
+    game.bills_fx.update_collection(60.0, th * 4.0 + 20.0)
     check(visits.n == 3, "but never more than three times per run")
 
     # 还掉房租：不再有人上门
