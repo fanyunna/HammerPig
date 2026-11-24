@@ -1881,6 +1881,7 @@ func strike(point: Vector2, power := 1.0) -> void:
 					if crit:
 						gain *= 2 # 暴击和三连以上叠加时能滚出很高的数字，这正是"手气来了"的时刻
 					gain = roundi(float(gain) * wheel_score_mul()) # 转盘得分×2：与卡片双倍相互独立，可叠乘
+					gain += build.direct_break_bonus(self) # 碎瓷回收：每三只普通击碎返钱（同时累计破罐工匠进度）
 					score += gain
 					if gain > best_gain:
 						best_gain = gain # 结算高光：本局最豪的一锤
