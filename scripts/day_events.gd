@@ -12,6 +12,8 @@ const CONFIRM_RECT := Rect2(545, 648, 190, 50) # 结果态的「收下」，与�
 const SCHEDULE := {2: "pawn", 4: "dice", 6: "calls"} # 天数 → 玩法
 const MAX_PER_RUN := 3
 const GAP_SECONDS := 0.5 # 两场事件之间的最短间隔
+const WARN_SECONDS := 1.8 # 开桌前预警：顶部横幅先喊一嗓子，别让弹窗凭空砸脸
+const OPEN_GRACE := 0.5 # 入场缓冲：刚弹出的半秒内吞掉点击，防敲猪连点误触
 
 # —— 当铺砍价 ——
 const PAWN_BASE := 180
@@ -44,6 +46,9 @@ var last_day := 0 # 已处理到的日历天数：跨天只发新里程碑，不
 var pending: Array[String] = [] # 排队中的事件：一次只放一场，被打断就顺延
 var gap_t := 0.0
 var active := "" # "" / pawn / dice / calls
+var warn_id := "" # 预警中的事件：横幅先提示，倒计时走完才真正开桌
+var warn_t := 0.0
+var grace_t := 0.0 # 入场缓冲剩余时间：>0 时吞掉一切点击
 
 # —— 当铺状态 ——
 var pawn_state := "" # swing / preview / result
@@ -89,6 +94,8 @@ func reset_run() -> void:
 	served = 0
 	pending.clear()
 	gap_t = 0.0
+	warn_id = ""
+	warn_t = 0.0
 	active = ""
 	pawn_state = ""
 	dice_state = ""
@@ -103,7 +110,17 @@ func _process(delta: float) -> void:
 	if main == null:
 		return
 	gap_t = maxf(0.0, gap_t - delta)
-	if active != "": # 四个公共动画计时：入场弹出 / 拍板 / 翻牌 / 结算演出
+	if warn_id != "": # 预警倒计时：走完才开桌；期间被账单/转盘抢先就退回队列顺延
+		warn_t -= delta
+		if warn_t <= 0.0:
+			if _can_open():
+				served += 1
+				_open(warn_id)
+				gap_t = GAP_SECONDS
+			else:
+				pending.push_front(warn_id)
+			warn_id = ""
+	if active != "": # 公共计时
 		open_t = minf(1.0, open_t + delta * 4.0)
 		pawn_bang = maxf(0.0, pawn_bang - delta)
 		dice_flip = maxf(0.0, dice_flip - delta)
@@ -114,6 +131,8 @@ func _process(delta: float) -> void:
 	_schedule_check()
 	if active == "pawn" and pawn_state == "swing":
 		pawn_t += delta
+	if active != "":
+		grace_t = maxf(0.0, grace_t - delta) # 入场缓冲计时
 	if active == "calls" and calls_state == "memo":
 		calls_t -= delta
 		if calls_t <= 0.0:
@@ -135,13 +154,15 @@ func _schedule_check() -> void:
 			if SCHEDULE.has(m) and served < MAX_PER_RUN:
 				pending.append(String(SCHEDULE[m]))
 		last_day = day
+	if warn_id != "":
+		return # 预警中：等倒计时走完
 	if pending.is_empty() or active != "" or gap_t > 0.0:
 		return
 	if not _can_open():
 		return # 账单考核 / 转盘 / 弹窗在场：顺延，不丢弃
-	served += 1
-	_open(pending.pop_front())
-	gap_t = GAP_SECONDS
+	# 不直接开桌：先在顶部喊一嗓子，给玩家收尾手里活的时间
+	warn_id = pending.pop_front()
+	warn_t = WARN_SECONDS
 
 func _can_open() -> bool:
 	return main.phase == "playing" and not main.intro_open \
@@ -159,8 +180,8 @@ func _open(id: String) -> void:
 	settle_t = 0.0
 	match id:
 		"pawn":
-			pawn_state = "swing"
-			pawn_t = -PAWN_PERIOD * 0.25 # 从最低点起摆：指针一开始就贴着 0.7x
+			pawn_state = "ready" # 先待命：指针不摆、点哪都不算，明确点「开砍」才开始
+			pawn_t = -PAWN_PERIOD * 0.25 # 显示位置贴着 0.7x
 			pawn_period = PAWN_PERIOD
 			pawn_clicks = 0
 			pawn_locked_mul = 0.0
@@ -198,6 +219,7 @@ func _open(id: String) -> void:
 			calls_state = "memo"
 			calls_t = float(CALL_MEMO[mini(calls_round - 1, CALL_MEMO.size() - 1)]) / float(calls_seq.size())
 			Sound.play("stamp", 0.7)
+	grace_t = OPEN_GRACE # 入场缓冲：吞掉弹窗瞬间玩家手上还没停下的连点
 
 func _pawn_pick_item() -> String:
 	var types: Array = main.settings.get("pig_types", [])
@@ -219,6 +241,8 @@ func _close() -> void:
 func handle_click(point: Vector2) -> bool:
 	if active == "":
 		return false
+	if grace_t > 0.0:
+		return true # 入场缓冲：刚弹出的半秒内只吞点击，不产生任何效果
 	match active:
 		"pawn":
 			_pawn_click(point)
@@ -236,6 +260,9 @@ func handle_key(keycode: int) -> bool:
 		return true
 	if keycode == KEY_SPACE or keycode == KEY_ENTER:
 		if active == "pawn":
+			if pawn_state == "ready":
+				_pawn_begin() # 空格 = 开砍，和按钮等效
+				return true
 			if pawn_state == "preview":
 				_pawn_accept() # 空格 = 接受第一刀的开价
 				return true
@@ -252,7 +279,17 @@ func handle_key(keycode: int) -> bool:
 
 # ---------------------------------------------------------------- 当铺砍价
 
+func _pawn_begin() -> void:
+	## 「开砍」确认：从待命进入摆针，起点固定贴着 0.7x
+	pawn_state = "swing"
+	pawn_t = -PAWN_PERIOD * 0.25
+	Sound.play("click")
+
 func _pawn_click(point: Vector2) -> void:
+	if pawn_state == "ready": # 待命态：只有「开砍」按钮有效，其余点击一律不算
+		if CONFIRM_RECT.has_point(point):
+			_pawn_begin()
+		return
 	if pawn_state == "swing":
 		if not PANEL_RECT.grow(-10).has_point(point):
 			return # 点面板外不算：防止误触把刀砍下去
@@ -449,7 +486,11 @@ func _calls_end(win: bool) -> void:
 
 func draw(p) -> void:
 	## 由 main 在自己的 _draw() 末尾调用：text/panel/button 都画在 main 的画布上。
-	if main == null or active == "":
+	if main == null:
+		return
+	if warn_id != "":
+		_draw_warn() # 开桌预警横幅：游戏不暂停，玩家可以收完手里这一锤
+	if active == "":
 		return
 	p.panel(PANEL_RECT, Color("#37251a"), 18)
 	p.draw_rect(PANEL_RECT.grow(-4), Color("#e0b552"), false, 2.0) # 暖黄描边，和转盘一个基调
@@ -462,6 +503,21 @@ func draw(p) -> void:
 			_draw_dice()
 		"calls":
 			_draw_calls()
+
+func _draw_warn() -> void:
+	## 顶部预警横幅：金框 + 呼吸灯边线，提示马上要来的是哪个小游戏
+	var p = main
+	var label := ""
+	match warn_id:
+		"pawn": label = "当铺砍价"
+		"dice": label = "赌桌比大小"
+		"calls": label = "催债电话"
+		_: label = warn_id
+	var rect := Rect2(410, 22, 460, 44)
+	var pulse := 0.5 + 0.5 * sin(main.elapsed * 8.0)
+	p.panel(rect, Color("#37251a"), 12)
+	p.draw_rect(rect.grow(-3), Color(1.0, 0.72, 0.35, 0.45 + 0.4 * pulse), false, 2.0)
+	p.text_center("⚠ " + label + "：老板驾到，马上开桌（" + str(int(ceil(warn_t))) + "s）", rect.get_center().x, rect.get_center().y + 2, 16, Color("#ffe092"))
 
 func _panel_title(title: String, hint: String) -> void:
 	var p = main
@@ -487,7 +543,11 @@ func _draw_pawn() -> void:
 		var x := bar.position.x + bar.size.x * (mul - 0.7) / 1.5
 		p.draw_line(Vector2(x, bar.end.y), Vector2(x, bar.end.y + 8), Color("#b59a7c"), 1.5)
 		p.text_center(("%.1f" % mul) + "x", x, bar.end.y + 22, 13, Color("#b59a7c"))
-	var mul_now := pawn_locked_mul if pawn_state != "swing" else pawn_mul_now()
+	var mul_now := 0.7 # 待命态：还没下刀，显示起始档 0.7x
+	if pawn_state == "swing":
+		mul_now = pawn_mul_now()
+	elif pawn_state != "ready":
+		mul_now = pawn_locked_mul
 	var needle_x := bar.position.x + bar.size.x * (mul_now - 0.7) / 1.5
 	var hot := mul_now >= 1.6
 	p.draw_line(Vector2(needle_x, bar.position.y - 14), Vector2(needle_x, bar.end.y + 4),
@@ -515,6 +575,9 @@ func _draw_pawn() -> void:
 	p.panel(Rect2(310, counter_y + 18, 660, 64), Color("#543823"), 0)
 	p.draw_line(Vector2(310, counter_y + 18), Vector2(970, counter_y + 18), Color("#3a2c20"), 2.0)
 	match pawn_state:
+		"ready":
+			p.text_center("老板已就位 —— 点「开砍！」或按空格，指针摆起来后再点面板下刀", cx, 470, 15, Color("#b59a7c"))
+			p.button(CONFIRM_RECT, "开砍！")
 		"swing":
 			p.text_center("点面板内任意位置下刀" + ("（就这一锤子买卖了）" if pawn_final else "（第一刀，砍完还能再砍一次）"),
 				cx, 470, 15, Color("#b59a7c"))

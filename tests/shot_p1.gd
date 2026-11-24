@@ -132,9 +132,15 @@ func run() -> void:
 	# 天数里程碑小游戏：当铺 / 赌桌 / 电话
 	print("STEP day events")
 	game.day_events._open("pawn")
+	await snap("tmp_p1_pawn_ready.png") # 新增：待命态（防误触第一层）
+	game.day_events.pawn_state = "swing" # _open 现在进待命态：截图要拍摆针，手动切过去
 	game.day_events.pawn_t = 0.1 # 摆到中高价区，看指针与三档色带
 	await snap("tmp_p1_pawn.png")
 	game.day_events._close()
+	game.day_events.warn_id = "pawn" # 新增：开桌预警横幅（防误触第零层）
+	game.day_events.warn_t = 1.2
+	await snap("tmp_p1_warn.png")
+	game.day_events.warn_id = ""
 
 	game.day_events._open("dice")
 	game.day_events.forced_deck.assign([10, 13, 8, 6, 6])

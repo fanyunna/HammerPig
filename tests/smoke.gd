@@ -543,6 +543,33 @@ func run() -> void:
     game._process(0.016)
     check(game.cursor_hidden, "...and the hammer takes over again after the popup closes")
 
+    # --- 天数小游戏防误触：预警横幅 + 当铺待命态 + 入场缓冲 ---
+    game.day_events.reset_run()
+    game.day_events.pending.assign(["pawn"])
+    game.day_events.last_day = int(game.game_day) - 1 # 逼调度器立刻发事件
+    game.day_events._process(0.016)
+    check(game.day_events.warn_id == "pawn" and game.day_events.active == "", "milestone shows a warning banner before opening")
+    check(game.day_events.served == 0, "the event is not counted served until it actually opens")
+    var base_score := int(game.score)
+    game.day_events._open("pawn") # 模拟预警走完后的开桌
+    check(game.day_events.pawn_state == "ready", "the pawnshop opens in a ready state, needle still")
+    game.day_events.handle_click(game.day_events.PANEL_RECT.get_center()) # 点面板中央：待命态不该下刀
+    check(game.day_events.pawn_state == "ready", "clicking the panel in ready state does NOT swing the knife")
+    game.day_events.grace_t = 0.0 # 清掉入场缓冲再点「开砍」
+    game.day_events.handle_click(Vector2(game.day_events.CONFIRM_RECT.get_center()))
+    check(game.day_events.pawn_state == "swing", "clicking the start button begins the swing")
+    game.day_events._close()
+    game.day_events._open("pawn")
+    game.day_events.grace_t = 0.4 # 模拟连点惯性：入场缓冲内的点击必须被吞
+    game.day_events.handle_click(Vector2(game.day_events.CONFIRM_RECT.get_center()))
+    check(game.day_events.pawn_state == "ready", "clicks during the opening grace period are swallowed")
+    game.day_events.grace_t = 0.0
+    game.day_events.handle_click(Vector2(game.day_events.CONFIRM_RECT.get_center()))
+    check(game.day_events.pawn_state == "swing", "once the grace expires the start button works again")
+    game.day_events._close()
+    game.day_events.warn_id = ""
+    check(int(game.score) == base_score, "no pawn money can slip in from accidental clicks alone")
+
     # --- 大肚猪要四锤；价目表只列见过的种类 ---
     var real: Array = [
         {"id": "fat", "label": "大肚猪", "weight": 100, "hp": 4, "value": 36, "speed": 0.7, "scale": 1.3},
@@ -1510,11 +1537,16 @@ func run() -> void:
     check(game.day_events.last_day == int(game.game_day), "reset anchors the schedule to the current day")
     game.game_day = 4 # 一帧跨过第 2、4 天两个里程碑
     game.day_events._schedule_check()
+    check(game.day_events.warn_id == "pawn" and game.day_events.active == "",
+        "crossing two days queues both milestones and warns before opening the oldest")
+    game.day_events._process(game.day_events.WARN_SECONDS + 0.05) # 预警走完：真正开桌
     check(game.day_events.served == 1 and game.day_events.active == "pawn" and game.day_events.pending.size() == 1,
-        "crossing two days queues both milestones and opens the oldest")
+        "the warned milestone opens after the banner countdown")
     # —— 当铺砍价：指针 mul = 1.45 + 0.75·sin(2π·t/period)，t=0 时恰好 1.45x ——
     var pawn_price := int(round(180 * 1.45)) # 261
     var score_before_pawn: int = game.score
+    game.day_events.grace_t = 0.0 # 测试不等入场缓冲
+    game.day_events._pawn_begin() # 从待命态正式开砍（真机点「开砍」或按空格）
     game.day_events.pawn_t = 0.0
     game.day_events.handle_click(Vector2(640, 400))
     check(game.day_events.pawn_state == "preview" and game.day_events.pawn_locked_mul == 1.45,
@@ -1531,6 +1563,7 @@ func run() -> void:
     # —— 赌桌：发牌从 forced_deck 取，庄家 17 停牌 ——
     game.score = 800
     game.day_events._open("dice")
+    game.day_events.grace_t = 0.0 # 测试不等入场缓冲
     check(game.day_events.dice_state == "bet" and not game.day_events.dice_poor, "the dice table opens in bet phase")
     game.day_events.forced_deck.assign([10, 13, 8, 6, 6]) # 玩家 20，庄家 14→20
     game.day_events.handle_click(Vector2(game.day_events.BET_RECTS[0].get_center()))
@@ -1543,6 +1576,7 @@ func run() -> void:
     game.day_events.handle_key(KEY_SPACE)
     check(not game.day_events.is_open(), "leaving the table closes the popup")
     game.day_events._open("dice")
+    game.day_events.grace_t = 0.0
     game.day_events.forced_deck.assign([13, 12, 9, 7, 13]) # 玩家 20，要牌一张 J → 30 爆牌
     game.day_events.handle_click(Vector2(game.day_events.BET_RECTS[1].get_center()))
     game.day_events.handle_click(Vector2(game.day_events.HIT_RECT.get_center()))
@@ -1551,6 +1585,7 @@ func run() -> void:
     # —— 赊账局：余额不足 ¥50 免押注，赢了只拿固定赏金 ——
     game.score = 40
     game.day_events._open("dice")
+    game.day_events.grace_t = 0.0
     check(game.day_events.dice_poor, "a broke player gets the credit game")
     game.day_events.forced_deck.assign([10, 9, 8, 6, 13]) # 玩家 19，庄家 14 → 补一张 13 → 27 爆（第 5 张是给庄家补牌的，别让牌堆抽空进随机）
     game.day_events.handle_click(Vector2(game.day_events.CONFIRM_RECT.get_center()))
