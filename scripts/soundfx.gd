@@ -1,6 +1,8 @@
 extends Node
 
-## 程序化音效：项目里只有 assets/hit.wav 一个素材，其余声音全部在这里现合成 buffer（AudioStreamWav）。
+## 程序化音效 + 真实素材双层：assets/sfx/ 下的录音优先，没有录音的声音在这里现合成 buffer（AudioStreamWav）。
+## 为什么保留合成：合成配方是跟着手感调出来的（见 _build 注释），录音覆盖不到的音效依然要能响。
+## 录音来自梅泽伟的 main 分支（break/card/coin/crit/hit/round_end/swing），语义映射见 REAL_SFX。
 ## 为什么这么做：这个项目的风格就是"能用代码生成的就别放素材"（看 desk3d.gd 的绒面贴图），
 ## 音效同理 —— 不用去找音频资源，改参数就能调手感。
 
@@ -10,6 +12,18 @@ extends Node
 ## 用法：Sound.play("pop")；单个音想变调就 Sound.play("cash", 1.2)。"crack" 例外 —— 走素材 hit.wav。
 
 const RATE := 44100
+
+## 真实素材优先表：合成配方照样保留，这张表里有录音的音就改用录音。
+## 录音自带混响和层次，比合成更厚；按语义映射，不逐个改调用点。
+const REAL_SFX := {
+    "pop": "res://assets/sfx/break.wav",   # 猪碎：真实碎裂录音
+    "cash": "res://assets/sfx/coin.wav",   # 进账：真实金币声
+    "card": "res://assets/sfx/card.wav",   # 翻牌：真实纸张声
+    "crit": "res://assets/sfx/crit.wav",   # 狂热：真实爆发声
+    "miss": "res://assets/sfx/swing.wav",  # 挥空：真实挥锤风声
+    "round_end": "res://assets/sfx/round_end.wav", # 一轮结束
+}
+
 const LIST := {
     "miss": 0.16,       # 挥空：一道风
     "pop": 0.34,        # 猪碎：闷响 + 碎裂
@@ -26,6 +40,7 @@ const LIST := {
     "crit": 0.50,       # 狂热连击：更尖更亮的上行琶音
     "card": 0.26,       # 翻牌：纸张
     "click": 0.06,      # UI 点击：极轻的一声
+    "round_end": 0.80,  # 一轮结束：合成兜底（有录音时走 REAL_SFX）
 }
 
 var muted := false
@@ -73,6 +88,10 @@ func toggle() -> bool:
 func _make(name: String) -> AudioStream:
     if _cache.has(name):
         return _cache[name]
+    if REAL_SFX.has(name): # 有录音的音优先用录音
+        var real: AudioStream = load(REAL_SFX[name])
+        _cache[name] = real
+        return real
     if name == "crack": # 保留原有素材：这一声的手感已经调好了
         var wav: AudioStream = load("res://assets/hit.wav")
         _cache["crack"] = wav

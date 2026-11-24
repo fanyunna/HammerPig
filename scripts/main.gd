@@ -1610,7 +1610,7 @@ func end_round_exhausted() -> void:
 	end_reason = "exhausted"
 	phase = "finished"
 	award_meta_progress()
-	Sound.play("fail")
+	Sound.play("round_end") # 梅泽伟录的一轮收尾音，比原来的失败音更贴"本轮结束"的语义
 
 
 ## 转盘 buff 的当前倍率。速度同时作用于小猪移动与重生倒计时；得分与卡片双倍相互独立
