@@ -15,12 +15,17 @@ const DEFINITIONS = {
 	"focus": ["校准锤", "进化", ["空挥后，下次命中 +1 伤害", "蓄力伤害累计 +2", "蓄力命中返 2 体力", "蓄力命中再额外 +1 伤害"]],
 	"spurs": ["赶路马刺", "进化", ["至少 3 连击时冷却 −10%", "至少 3 连击时冷却 −15%", "至少 3 连击时冷却 −20%", "至少 3 连击时冷却 −25%"]],
 	"collector": ["收据收藏家", "任务", ["还清 1/3/5 张账单自动成长", "每次还账返 ¥2", "每次还账返 ¥4", "每次还账返 ¥6"]],
-	"steadiness": ["稳手学徒", "任务", ["打出 2/4/6 组五连击成长", "挥锤体力减 0.25", "挥锤体力累计减 0.5", "挥锤体力累计减 0.75"]]
+	"steadiness": ["稳手学徒", "任务", ["打出 2/4/6 组五连击成长", "挥锤体力减 0.25", "挥锤体力累计减 0.5", "挥锤体力累计减 0.75"]],
+	"long_handle": ["长柄重锤", "代价", ["范围 +20%；挥锤冷却 +10%"]],
+	"frugal": ["节俭握把", "代价", ["每锤省 0.5 体力；正收益 −10%"]],
+	"scrap": ["碎瓷回收", "进化", ["每三只普通击碎奖励 ¥2", "每三只普通击碎奖励 ¥4", "每三只普通击碎奖励 ¥6", "每三只普通击碎奖励 ¥8"]],
+	"artisan": ["破罐工匠", "任务", ["普通击碎 4/8/12 只成长", "挥锤冷却 −3%", "挥锤冷却 −6%", "挥锤冷却 −9%"]]
 }
 const GOALS = {
 	"berserker": [15, 30, 50], "hunter": [10, 25, 50, 100], "broker": [1, 2, 3, 5],
-	"collector": [1, 3, 5], "steadiness": [2, 4, 6]
+	"collector": [1, 3, 5], "steadiness": [2, 4, 6], "artisan": [4, 8, 12]
 }
+var scrap_breaks := 0
 var insurance_misses := 0
 var focus_armed := false
 var panel_open := false
@@ -36,6 +41,7 @@ var final_paid: Dictionary = {}
 
 
 func reset() -> void:
+	scrap_breaks = 0
 	insurance_misses = 0
 	focus_armed = false
 	panel_open = false
@@ -100,6 +106,8 @@ func acquire(id: String, game) -> void:
 	if id == "devil":
 		game.settings["stamina_max"] = maxf(20.0, float(game.settings.stamina_max) * 0.8)
 		game.stamina = minf(game.stamina, float(game.settings.stamina_max))
+	if id == "long_handle":
+		game.hammer_reach_multiplier += 0.2
 	if id == "loan":
 		game.score += 45
 	if GOALS.has(id):
@@ -112,6 +120,7 @@ func cost(game) -> float:
 		(
 			float(game.settings.get("stamina_cost", 4))
 			- game.stamina_cost_reduction
+			- (0.5 if level("frugal") > 0 else 0.0)
 			- maxi(0, level("steadiness") - 1) * 0.25
 			+ (1.0 if level("overdrive") > 0 else 0.0)
 		)
@@ -137,6 +146,9 @@ func cooldown(game) -> float:
 	var spurs := level("spurs")
 	if spurs > 0 and game.combo_timer > 0.0 and game.combo_count >= 3:
 		value *= 0.95 - spurs * 0.05
+	if level("long_handle") > 0:
+		value *= 1.1
+	value *= 1.0 - maxi(0, level("artisan") - 1) * 0.03
 	return maxf(0.08, value)
 
 
@@ -183,11 +195,26 @@ func record_payment(game) -> void:
 
 func income_multiplier() -> float:
 	return (
-		(0.9 if level("insurance") > 0 else 1.0)
+		(0.9 if level("frugal") > 0 else 1.0)
+		* (0.9 if level("insurance") > 0 else 1.0)
 		* (1.4 if level("devil") > 0 else 1.0)
 		* (1.35 if level("tax") > 0 else 1.0)
 		* (1.0 + maxf(0.0, level("hunter") - 1) * 0.1)
 	)
+
+
+## Only successful direct breaks with positive base value count.
+## Negative-value pigs, chain/explosion kills and wheel prizes are excluded.
+func direct_break_bonus(game) -> int:
+	progress("artisan", game)
+	if level("scrap") == 0:
+		return 0
+	scrap_breaks = (scrap_breaks + 1) % 3
+	if scrap_breaks != 0:
+		return 0
+	var amount := level("scrap") * 2
+	notify(game, "碎瓷回收 +¥" + str(amount))
+	return amount
 
 
 func secondary_reward(game) -> int:
@@ -218,7 +245,7 @@ func progress(id: String, game) -> void:
 		return
 	var goals: Array = GOALS[id]
 	counts[id] = int(counts.get(id, 0)) + 1
-	if id == "collector" or id == "steadiness":
+	if id == "collector" or id == "steadiness" or id == "artisan":
 		counts[id] = mini(int(counts[id]), int(goals.back()))
 	while level(id) < 4 and int(counts[id]) >= int(goals[level(id) - 1]):
 		levels[id] = level(id) + 1
