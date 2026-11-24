@@ -93,6 +93,8 @@ var impact_position := Vector2.ZERO
 var impact_broken := false
 var charging := false # 左键按住中
 var charge_t := 0.0 # 已经蓄了多久
+var charge_time := 1.0 # 重力锤：蓄满所需时间（锤子数据注入）
+var stun_t := 0.0 # 重力锤落地硬直：这段时间不能挥锤
 var charge_pig := -1 # 按下那一刻瞄准的猪（松手时它没跑远就还砸它）
 var pending_strike: Dictionary = {} # 冷却期间按下的那一锤：冷却一结束立刻补上，不静默丢点击
 var pending_t := 0.0
@@ -110,6 +112,7 @@ const WheelScript := preload("res://scripts/lucky_wheel.gd")
 const CardBuildScript := preload("res://scripts/card_build.gd")
 const DayEventsScript := preload("res://scripts/day_events.gd")
 const EscapeScript := preload("res://scripts/escape.gd")
+const ItemShopScript := preload("res://scripts/shop.gd") # 徐欣雨的道具商店：锤子/技能/背包/快捷栏
 var bills_fx # 账单效果：电费停电 / 信用卡利息 / 房租催收（BillManagerScript 实例）
 var hammer3d # 独立透明视口中的立体锤光标
 var earned_total := 0 # 本局累计赚到的钱（房租催收按它跨阈值触发）
@@ -195,6 +198,7 @@ const LEGACY_ITEMS := [
 ]
 var meta_shop: Dictionary = {} # 饰品 id → 已买等级
 var shop_open := false # 传承商店面板开着时：整局暂停、输入只认商店
+var shop # 局内道具商店（锤子/技能/背包/快捷栏）：独立子节点，挂在最上层自绘
 var base_stamina_max := 100.0
 var stamina := 100.0
 var stamina_flash := 0.0
@@ -227,6 +231,9 @@ func _ready() -> void:
 	add_child(escape) # 和 day_events 一样进场景树：生命周期跟着 main，不靠裸引用
 	escape.setup(self)
 	escape.stage_rect = CHALLENGE_STAGE # 舞台区域由这里注入：跨脚本读常量不做依赖
+	shop = ItemShopScript.new()
+	add_child(shop) # 最后挂上：商店/背包/快捷栏 HUD 要画在其他界面之上
+	shop.setup(self)
 	load_meta()
 	bills_fx.setup(bill_data)
 	bills_fx.collection_triggered.connect(_on_collection_triggered)
@@ -968,6 +975,7 @@ func sync_cursor() -> void:
 	hide = hide and not intro_open and not bill_open and bill_detail < 0 and not quick_bill_hover() and not help_open and not (build != null and build.panel_open)
 	hide = hide and not (wheel != null and wheel.is_open()) # 转盘弹窗里得看得见箭头
 	hide = hide and not (day_events != null and day_events.is_open()) # 小游戏弹窗同理：全靠点击，藏箭头就没法玩了
+	hide = hide and not (shop != null and shop.is_open()) # 道具商店/背包也一样：拖拽全靠箭头
 	if hide == cursor_hidden:
 		return
 	cursor_hidden = hide
@@ -1239,6 +1247,8 @@ func reset_game() -> void:
 	if wheel != null:
 		wheel.reset_run() # 新局：机会/连击/三个 buff 计时全部清零（多余的金猪视口上面已随 pig3d 裁掉）
 	build.reset() # 新局：本局构筑卡全部清空
+	if shop != null:
+		shop.reset_run() # 新局：已买锤子/技能/快捷栏全部清回初始（商店是局内资源）
 	day_events.reset_run() # 新局：里程碑日程重排，排队事件清空
 	escape.reset_run() # 逃跑场面复位（防结算瞬间残留在 intro/run 态）
 	queue_redraw()
@@ -1253,10 +1263,13 @@ func _process(delta: float) -> void:
 	if wheel != null and wheel.is_open(): # 转盘弹窗：整局暂停（猪停刷、不能砸）；转盘自己的 _process 继续转
 		queue_redraw()
 		return
-	if bill_open or bill_detail >= 0 or quick_bill_hover() or help_open or build.panel_open or day_events.is_open() or shop_open: # 翻账单/看构筑/小游戏弹窗/传承商店：整局都停下来
+	if bill_open or bill_detail >= 0 or quick_bill_hover() or help_open or build.panel_open or day_events.is_open() or shop_open or (shop != null and shop.is_open()): # 翻账单/看构筑/小游戏弹窗/传承商店/道具商店：整局都停下来
 		queue_redraw()
 		return
+	if shop != null:
+		shop.tick(delta) # 技能冷却/buff 计时只在游戏运行时走，面板打开时上面已 return
 	elapsed += delta
+	stun_t = maxf(0.0, stun_t - delta) # 重力锤落地硬直：时间到了才能再挥
 	if hit_stop > 0.0: # 打击顿帧：命中瞬间全场定格几帧 —— 冷却/猪/计时全停，只留给眼睛
 		hit_stop = maxf(0.0, hit_stop - delta)
 		if hit_stop > 0.0: # 还没解冻：这一帧定格。大步长（卡顿后的补帧/测试跳帧）一次耗完就照常走
@@ -1336,7 +1349,7 @@ func _process(delta: float) -> void:
 			pig.flash = maxf(0.0, pig.flash - delta)
 			pig.hop = maxf(0.0, pig.hop - delta)
 			if pig.hp > 0:
-				pig.position += pig.velocity * delta * wheel_speed_mul()
+				pig.position += pig.velocity * delta * wheel_speed_mul() * (shop.speed_mul() if shop != null else 1.0)
 				# 走路弹跳：相位随位移推进（每 26px 一步、蹦一下），速度越快蹦得越快
 				pig.hop_phase = fmod(float(pig.get("hop_phase", 0.0)) + pig.velocity.length() * delta / 26.0 * PI, TAU)
 				if absf(pig.velocity.x) > 4.0: # 近乎竖直走时别乱翻朝向
@@ -1403,6 +1416,9 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if shop != null and shop.is_open(): # 道具商店/背包打开：输入全转发给 shop（购买/拖拽、T/I/Esc 关闭）
+		shop.handle_input(event)
+		return
 	if shop_open: # 传承商店：输入只认商店。B / Esc 关闭，点击交给购买/关闭按钮
 		if event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_B or event.keycode == KEY_ESCAPE):
 			shop_open = false
@@ -1468,6 +1484,22 @@ func _unhandled_input(event: InputEvent) -> void:
 					queue_redraw()
 					return
 	if event is InputEventKey and event.pressed and not event.echo:
+		if phase == "playing" and shop != null and not bill_open and bill_detail < 0 and not help_open and not build.panel_open:
+			# 道具商店的三个入口：商店/背包/快捷栏技能。只在真正的游玩阶段生效，不抢其他界面的键
+			if event.keycode == KEY_T:
+				shop.try_open_shop()
+				sync_cursor()
+				queue_redraw()
+				return
+			if event.keycode == KEY_I:
+				shop.try_open_backpack()
+				sync_cursor()
+				queue_redraw()
+				return
+			if event.keycode in [KEY_1, KEY_2, KEY_3]:
+				shop.try_activate_skill(int(event.keycode - KEY_1))
+				queue_redraw()
+				return
 		if phase == "challenge" and card_type == "dodge" and escape != null:
 			# 逃跑场面：↑↓/W/S 换道，空格跳过开场演出。先于 B/账本等全局键处理
 			if event.keycode in [KEY_UP, KEY_W, KEY_DOWN, KEY_S, KEY_SPACE, KEY_ENTER]:
@@ -1775,7 +1807,7 @@ func swing_stamina_cost() -> float:
 
 
 func strike(point: Vector2, power := 1.0) -> void:
-	if phase != "playing" or build.panel_open:
+	if phase != "playing" or build.panel_open or stun_t > 0.0:
 		return
 	if cooldown > 0.0:
 		# 冷却里按下的这一锤不进垃圾桶：记下来，冷却一结束立刻补上。
@@ -1797,10 +1829,31 @@ func strike(point: Vector2, power := 1.0) -> void:
 	swing = 0.16
 	cooldown = build.cooldown(self) # 卡片2.0：过载引擎/狂战士/赊账/马刺的冷却修正都算在里面
 	stamina -= cost
+	if shop != null and shop.current_hammer_id == "gravity": # 重力锤：蓄力越久伤害与范围越大，落地硬直
+		_gravity_strike(point)
+		if wheel != null:
+			wheel.on_landed_hit()
+		return
 	var landed := false # 有没有打到东西：空挥要有和命中完全不同的声音
 	var target := strike_target(point)
+	var hammer_id: String = shop.current_hammer_id if shop != null else "iron"
+	var hammer_dmg: float = shop.hammer_base_damage() if shop != null else 1.0
+	if hammer_id == "magnet":
+		# 磁吸锤：先把范围内的猪吸到落点，伤害按吸附前的距离递减
+		var pull_r: float = shop.pull_radius()
+		var fall: float = shop.falloff_min()
+		for pig in pigs:
+			if pig.hp <= 0 or float(pig.respawn) > 0.0:
+				continue
+			var d: float = pig.position.distance_to(point)
+			if d <= pull_r:
+				pig["magnet_scale"] = lerpf(1.0, fall, d / pull_r)
+				pig.position = point
 	for pig in pigs:
-		if pig == target and not target.is_empty():
+		var hit_this: bool = pig == target and not target.is_empty()
+		if hammer_id == "magnet" and pig.hp > 0 and float(pig.respawn) <= 0.0 and pig.has("magnet_scale"):
+			hit_this = true # 磁吸锤：范围里吸附过的猪全部结算
+		if hit_this:
 			hits += 1
 			pig.flash = 0.14
 			pig.hop = 0.24 # 受击跳动
@@ -1829,7 +1882,11 @@ func strike(point: Vector2, power := 1.0) -> void:
 				hit_damage *= 2
 				Sound.play("crit")
 			build.critical_reward(lucky_crit, self)
-			pig.hp -= hit_damage
+			pig.hp -= float(hit_damage) * hammer_dmg * float(pig.get("magnet_scale", 1.0))
+			if hammer_id == "dual" and pig.hp > 0.0: # 连打锤：紧接第二下，共用同一次冷却
+				hits += 1
+				pig.hp -= float(hit_damage) * hammer_dmg
+				Sound.play("crack", 1.1, 0.6)
 			if hit_damage <= 0:
 				# 断臂求生：打中了却没掉血，必须给一句反馈，否则玩家会以为判定坏了
 				popups.append({"position": point + Vector2(-30, -58), "life": 0.55,
@@ -1882,6 +1939,11 @@ func strike(point: Vector2, power := 1.0) -> void:
 						gain *= 2 # 暴击和三连以上叠加时能滚出很高的数字，这正是"手气来了"的时刻
 					gain = roundi(float(gain) * wheel_score_mul()) # 转盘得分×2：与卡片双倍相互独立，可叠乘
 					gain += build.direct_break_bonus(self) # 碎瓷回收：每三只普通击碎返钱（同时累计破罐工匠进度）
+					if shop != null:
+						gain = roundi(float(gain) * shop.score_mul()) # 筛金算筹：技能激活期间的收益倍率
+						if shop.kill_bonus_mul() > 1.0: # 神秘盲盒：接下来三次击碎额外倍率
+							gain = roundi(float(gain) * shop.kill_bonus_mul())
+							shop.consume_kill()
 					score += gain
 					if gain > best_gain:
 						best_gain = gain # 结算高光：本局最豪的一锤
@@ -1947,6 +2009,42 @@ func strike(point: Vector2, power := 1.0) -> void:
 				"text": "砸空了", "color": Color("#d08f7a"), "size": 20})
 			Sound.play("stamp", 0.6, 0.8)
 
+## 重力锤：按下时按蓄力比例结算，伤害/范围递增，落地后自身短暂硬直。
+## 只砸一个落点范围，不挑猪种 —— 范围越大越容易顺手把旁边的猪也带走。
+func _gravity_strike(point: Vector2 = Vector2.INF) -> void:
+	if shop == null:
+		return
+	if point == Vector2.INF: # 不传落点时用当前锤头位置：自动测试直接调这个入口
+		point = hammer_position
+	charge_time = maxf(0.05, float(shop.current_hammer().get("charge_time", 1.0)))
+	var ratio := clampf(charge_t / charge_time, 0.0, 1.0)
+	var dmg := lerpf(float(shop.current_hammer().get("damage_min", 1.0)), \
+		float(shop.current_hammer().get("damage_max", 3.0)), ratio)
+	var radius: float = 84.0 * lerpf(1.0, float(shop.current_hammer().get("radius_max", 1.6)), ratio)
+	var landed := false
+	for pig in pigs:
+		if pig.hp <= 0 or float(pig.respawn) > 0.0:
+			continue
+		if pig.position.distance_to(point) <= radius:
+			pig.hp -= dmg
+			pig.flash = 0.14
+			pig.hop = 0.24
+			landed = true
+			if pig.hp <= 0:
+				settle_card_break(pig, false)
+	if landed:
+		impact_position = point
+		impact_timer = 0.2
+		shake = maxf(shake, 0.22)
+		hit_stop = maxf(hit_stop, 0.07)
+		Sound.play("pop", 0.7, 0.9)
+	else:
+		Sound.play("miss", 0.9, 0.6)
+	stun_t = float(shop.current_hammer().get("stun", 0.45))
+	charge_t = 0.0
+	queue_redraw()
+
+
 ## 卡片2.0 的连锁/爆破击杀结算：与 strike 主结算同一套入账规则，
 ## 但不带蓄力倍率与猪种修正（连锁伤害本身就不挑猪种）。
 func settle_card_break(pig: Dictionary, secondary: bool) -> void:
@@ -1974,6 +2072,8 @@ func settle_card_break(pig: Dictionary, secondary: bool) -> void:
 		if double_timer > 0.0:
 			gain *= 2
 		gain = roundi(float(gain) * wheel_score_mul()) # 转盘得分×2与卡片加成独立叠乘
+		if shop != null:
+			gain = roundi(float(gain) * shop.score_mul())
 		score += gain
 	broken += 1
 	build.progress("hunter", self) # 连锁击碎同样计入猎猪执照

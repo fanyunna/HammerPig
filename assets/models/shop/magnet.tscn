@@ -1,0 +1,122 @@
+[gd_scene format=3]
+
+[ext_resource type="FontFile" path="res://assets/fonts/NotoSansSC.ttf" id="1_3xhgb"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_jewjv"]
+albedo_color = Color(0.5411765, 0.5647059, 0.6, 1)
+metallic = 0.9
+roughness = 0.35
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_uw1iq"]
+material = SubResource("StandardMaterial3D_jewjv")
+top_radius = 0.04
+bottom_radius = 0.05
+height = 0.5
+radial_segments = 24
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_duprx"]
+albedo_color = Color(0.72156864, 0.4509804, 0.2, 1)
+metallic = 0.9
+roughness = 0.3
+
+[sub_resource type="TorusMesh" id="TorusMesh_2h6xi"]
+material = SubResource("StandardMaterial3D_duprx")
+inner_radius = 0.045
+outer_radius = 0.066
+
+[sub_resource type="TorusMesh" id="TorusMesh_5shiv"]
+material = SubResource("StandardMaterial3D_duprx")
+inner_radius = 0.045
+outer_radius = 0.066
+
+[sub_resource type="TorusMesh" id="TorusMesh_pmmkr"]
+material = SubResource("StandardMaterial3D_duprx")
+inner_radius = 0.045
+outer_radius = 0.066
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_nds21"]
+material = SubResource("StandardMaterial3D_jewjv")
+top_radius = 0.26
+bottom_radius = 0.26
+height = 0.13
+radial_segments = 32
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_05gm4"]
+albedo_color = Color(0.24705882, 0.49019608, 0.8784314, 1)
+metallic = 0.4
+roughness = 0.4
+
+[sub_resource type="BoxMesh" id="BoxMesh_poen8"]
+material = SubResource("StandardMaterial3D_05gm4")
+size = Vector3(0.17, 0.34, 0.025)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_s4oyv"]
+albedo_color = Color(0.8509804, 0.29411766, 0.29411766, 1)
+metallic = 0.4
+roughness = 0.4
+
+[sub_resource type="BoxMesh" id="BoxMesh_6bknp"]
+material = SubResource("StandardMaterial3D_s4oyv")
+size = Vector3(0.17, 0.34, 0.025)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_1bod1"]
+albedo_color = Color(0.7647059, 0.7882353, 0.81960785, 1)
+metallic = 0.95
+roughness = 0.25
+
+[sub_resource type="TorusMesh" id="TorusMesh_rrurd"]
+material = SubResource("StandardMaterial3D_1bod1")
+inner_radius = 0.225
+outer_radius = 0.262
+
+[node name="model_magnet" type="Node3D" unique_id=368853160]
+
+[node name="@MeshInstance3D@39" type="MeshInstance3D" parent="." unique_id=761324581]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.26, 0)
+mesh = SubResource("CylinderMesh_uw1iq")
+
+[node name="@MeshInstance3D@40" type="MeshInstance3D" parent="." unique_id=448248501]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, -1, 0, 1, -4.371139e-08, 0, -0.02, 0)
+mesh = SubResource("TorusMesh_2h6xi")
+
+[node name="@MeshInstance3D@41" type="MeshInstance3D" parent="." unique_id=824584547]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, -1, 0, 1, -4.371139e-08, 0, 0.04, 0)
+mesh = SubResource("TorusMesh_5shiv")
+
+[node name="@MeshInstance3D@42" type="MeshInstance3D" parent="." unique_id=799297452]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, -1, 0, 1, -4.371139e-08, 0, 0.1, 0)
+mesh = SubResource("TorusMesh_pmmkr")
+
+[node name="@MeshInstance3D@43" type="MeshInstance3D" parent="." unique_id=2096937733]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, -1, 0, 1, -4.371139e-08, 0, 0.18, 0)
+mesh = SubResource("CylinderMesh_nds21")
+
+[node name="@MeshInstance3D@44" type="MeshInstance3D" parent="." unique_id=6497687]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.087, 0.18, 0.075)
+mesh = SubResource("BoxMesh_poen8")
+
+[node name="@MeshInstance3D@45" type="MeshInstance3D" parent="." unique_id=743674107]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.087, 0.18, 0.075)
+mesh = SubResource("BoxMesh_6bknp")
+
+[node name="@MeshInstance3D@46" type="MeshInstance3D" parent="." unique_id=1368322430]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.18, 0.085)
+mesh = SubResource("TorusMesh_rrurd")
+
+[node name="@Label3D@47" type="Label3D" parent="." unique_id=2103124667]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.09, 0.18, 0.105)
+pixel_size = 0.001875
+modulate = Color(0.91764706, 0.9490196, 1, 1)
+text = "N"
+font = ExtResource("1_3xhgb")
+font_size = 64
+outline_size = 0
+
+[node name="@Label3D@48" type="Label3D" parent="." unique_id=2102615601]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.09, 0.18, 0.105)
+pixel_size = 0.001875
+modulate = Color(1, 0.9411765, 0.9411765, 1)
+text = "S"
+font = ExtResource("1_3xhgb")
+font_size = 64
+outline_size = 0
