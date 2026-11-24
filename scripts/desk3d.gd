@@ -13,6 +13,7 @@ const VIEW_W := 1280.0
 const VIEW_H := 800.0
 const FOV := 30.0 # 透视视野（度）：越小越像长焦、越"远"（30° 比 38° 的近端放大温和）
 const PITCH := 1.047 # 俯角 60°：从上往下看桌面，同时保留猪和锤击的立体感
+static var pitch_override := 0.0 # 调试用：>0 时覆盖 PITCH（截图脚本拿它跑多角度对照原版）
 const CAM_DIST := 16.0 # 相机到原点的距离（配合长焦，减小透视夸张）
 const DESK_THICK := 0.34
 const DESK_MARGIN := 0.35 # 桌板比围栏区外扩的世界余量（做桌沿）
@@ -181,7 +182,8 @@ func _build_scene() -> void:
 	_cam = Camera3D.new()
 	_cam.projection = Camera3D.PROJECTION_PERSPECTIVE
 	_cam.fov = FOV
-	_cam.position = Vector3(0.0, CAM_DIST * sin(PITCH), CAM_DIST * cos(PITCH))
+	var pitch := pitch_override if pitch_override > 0.0 else PITCH
+	_cam.position = Vector3(0.0, CAM_DIST * sin(pitch), CAM_DIST * cos(pitch))
 	_cam.look_at_from_position(_cam.position, Vector3.ZERO)
 	_cam.current = true
 	add_child(_cam)
@@ -212,8 +214,10 @@ func _build_scene() -> void:
 	floor_node.material_override = fm
 	add_child(floor_node)
 
-	# 桌板尺寸从 DESK_RECT 反投影算出来：不管俯角多少，桌面都恰好盖住猪的活动区
-	var frame := _desk_frame()
+	# 桌板尺寸：参考原版《账单必须支付》——桌面铺满画面（桌沿压到屏幕边缘之外），
+	# 猪活动区只是桌面上的一块区域；装饰仍按猪活动区反算，留在画面内。
+	var frame := _desk_frame(Rect2(Vector2.ZERO, Vector2(VIEW_W, VIEW_H)).grow(-6.0))
+	var inner := _desk_frame(_pen_rect.grow(76.0)) # 76 ≈ 猪半径 69 + 一点桌沿余量
 	var desk_w: float = frame.w
 	var desk_d: float = frame.d
 	var desk_cz: float = frame.cz
@@ -256,7 +260,7 @@ func _build_scene() -> void:
 	_add_box(Vector3(-rail_x + 0.16, rail_y + 0.073, desk_cz), Vector3(0.018, 0.012, desk_d - 0.40), gold)
 	_add_box(Vector3(rail_x - 0.16, rail_y + 0.073, desk_cz), Vector3(0.018, 0.012, desk_d - 0.40), gold)
 
-	_decorate(frame) # 桌边账单纸、散落零钱和马克杯，猪活动区保持畅通
+	_decorate(inner) # 桌边账单纸、散落零钱和马克杯，锚定猪活动区，铺满后仍留在画面内
 
 	# 桌腿：视角放远后桌子下沿会进画面，得有腿撑着
 	var leg_h := -FLOOR_Y - DESK_THICK + 0.1
@@ -281,11 +285,8 @@ func _build_scene() -> void:
 		add_child(leg)
 
 
-## 桌板大小由**猪活动区**的屏幕矩形反投影决定（不是 DESK_RECT）：
-## 只比猪的活动区大一圈，桌子才能在画面里完整露出来，而不是铺满屏幕。
-## 反投影只依赖相机，所以俯角/距离怎么调，桌板都恰好盖住猪的活动范围。
-func _desk_frame() -> Dictionary:
-	var area := _pen_rect.grow(76.0) # 76 ≈ 猪半径 69 + 一点桌沿余量
+## 桌板大小按给定的屏幕矩形反投影（透视下屏幕↔世界非线性，见 _screen_to_desk）。
+func _desk_frame(area: Rect2) -> Dictionary:
 	var tl := _screen_to_desk(area.position)
 	var bl := _screen_to_desk(area.position + Vector2(0.0, area.size.y))
 	var half_w := maxf(absf(tl.x), absf(bl.x)) + DESK_MARGIN
