@@ -37,7 +37,14 @@ var font := SystemFont.new()
 var bg_texture: Texture2D
 var pig_textures := {}
 var hammer_texture: Texture2D
-var sfx := {} # 名称 -> AudioStreamPlayer
+const SFX_POOL_SIZE := 3 # 每个音效最多同时播放的声道数（复音，避免连续敲击互相打断）
+var sfx := {} # 名称 -> AudioStreamPlayer（池中第 0 个，供冒烟测试与静音检查引用）
+var _sfx_pool := {} # 名称 -> Array[AudioStreamPlayer]
+var _sfx_vol := {} # 名称 -> 基础音量(db)
+var _sfx_pitch := {} # 名称 -> 音高随机幅度
+var _sfx_volvar := {} # 名称 -> 音量随机幅度(db)
+var _sfx_idx := {} # 名称 -> 轮询指针
+var sfx_muted := false
 
 func load_texture(path: String) -> Texture2D:
     if FileAccess.file_exists(path):
@@ -46,18 +53,39 @@ func load_texture(path: String) -> Texture2D:
             return ImageTexture.create_from_image(img)
     return null
 
-func make_player(path: String, volume_db: float) -> AudioStreamPlayer:
-    var p := AudioStreamPlayer.new()
+func _add_sfx(name: String, path: String, volume_db: float, pitch_vary := 0.0, vol_vary := 0.0) -> void:
+    # 为每个音效建立复音声道池：连续敲击时新音不会打断旧音
+    var stream: AudioStream = null
     if FileAccess.file_exists(path):
-        p.stream = AudioStreamWAV.load_from_file(path)
-    p.volume_db = volume_db
-    add_child(p)
-    return p
+        stream = AudioStreamWAV.load_from_file(path)
+    var pool: Array[AudioStreamPlayer] = []
+    for i in SFX_POOL_SIZE:
+        var p := AudioStreamPlayer.new()
+        p.stream = stream
+        p.volume_db = volume_db
+        add_child(p)
+        pool.append(p)
+    _sfx_pool[name] = pool
+    sfx[name] = pool[0]
+    _sfx_vol[name] = volume_db
+    _sfx_pitch[name] = pitch_vary
+    _sfx_volvar[name] = vol_vary
 
 func play_sfx(name: String) -> void:
-    var p: AudioStreamPlayer = sfx.get(name)
-    if p and p.stream:
-        p.play()
+    if sfx_muted:
+        return
+    var pool: Array = _sfx_pool.get(name, [])
+    if pool.is_empty():
+        return
+    var i := int(_sfx_idx.get(name, 0))
+    _sfx_idx[name] = (i + 1) % pool.size()
+    var p: AudioStreamPlayer = pool[i]
+    if not p.stream:
+        return
+    # 轻微的音高与音量随机，让连续敲击听感更自然
+    p.pitch_scale = randf_range(1.0 - _sfx_pitch[name], 1.0 + _sfx_pitch[name])
+    p.volume_db = _sfx_vol[name] + randf_range(-_sfx_volvar[name], _sfx_volvar[name])
+    p.play()
 
 func _ready() -> void:
     font.font_names = PackedStringArray(["PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Noto Sans CJK SC"])
@@ -66,13 +94,13 @@ func _ready() -> void:
     for kind in KINDS:
         pig_textures[kind] = load_texture("res://assets/art/pig_%s.png" % kind)
     hammer_texture = load_texture("res://assets/art/hammer_hand.png")
-    sfx["swing"] = make_player("res://assets/sfx/swing.wav", -10)
-    sfx["hit"] = make_player("res://assets/sfx/hit.wav", -8)
-    sfx["break"] = make_player("res://assets/sfx/break.wav", -8)
-    sfx["coin"] = make_player("res://assets/sfx/coin.wav", -10)
-    sfx["crit"] = make_player("res://assets/sfx/crit.wav", -8)
-    sfx["end"] = make_player("res://assets/sfx/round_end.wav", -10)
-    sfx["card"] = make_player("res://assets/sfx/card.wav", -10)
+    _add_sfx("swing", "res://assets/sfx/swing.wav", -10, 0.04, 0.5)
+    _add_sfx("hit", "res://assets/sfx/hit.wav", -8, 0.08, 1.0)
+    _add_sfx("break", "res://assets/sfx/break.wav", -8, 0.06, 1.0)
+    _add_sfx("coin", "res://assets/sfx/coin.wav", -10, 0.10, 1.5)
+    _add_sfx("crit", "res://assets/sfx/crit.wav", -8, 0.04, 0.5)
+    _add_sfx("end", "res://assets/sfx/round_end.wav", -10)
+    _add_sfx("card", "res://assets/sfx/card.wav", -10)
     reset_game()
 
 func pick_kind() -> String:
@@ -178,6 +206,8 @@ func _unhandled_input(event: InputEvent) -> void:
     if event is InputEventKey and event.pressed and not event.echo:
         if event.keycode == KEY_R:
             reset_game()
+        elif event.keycode == KEY_M:
+            sfx_muted = not sfx_muted
         elif event.keycode == KEY_SPACE or event.keycode == KEY_ENTER:
             if phase == "card":
                 apply_card()
@@ -319,8 +349,10 @@ func _draw() -> void:
     for p in popups:
         text_at(p.text, p.position, 28, Color("#ffe092"))
     var stamina_cost_text := str(int(settings.get("stamina_cost", 10)))
-    text_at("移动鼠标瞄准 · 左键挥锤（-" + stamina_cost_text + " 体力）· R 清空重开", Vector2(320, 728), 22, Color("#2b1c10"))
+    text_at("移动鼠标瞄准 · 左键挥锤（-" + stamina_cost_text + " 体力）· R 清空重开 · M 静音", Vector2(320, 728), 22, Color("#2b1c10"))
     text_at("范围内的猪会被一起敲中；体力耗尽本轮结束，每 5 轮弹出一次卡片。", Vector2(310, 764), 16, Color("#4a3322"))
+    if sfx_muted:
+        text_at("声音已关闭（按 M 开启）", Vector2(1100, 764), 16, Color("#e06c5c"))
     if phase == "playing":
         draw_hammer()
     else:
@@ -345,27 +377,51 @@ func draw_pig(pig: Dictionary) -> void:
     var pos: Vector2 = pig.position
     if pig.flash > 0.0:
         pos.x += sin(pig.flash * 90) * 8
+    var jump := 0.0 # 0=落地 1=最高点
     if pig.hop > 0.0:
-        pos.y -= sin(pig.hop / 0.24 * PI) * 26 # 受击向上跳起
+        jump = sin(pig.hop / 0.24 * PI)
+        pos.y -= jump * 26.0 # 受击向上跳起
     var kind: Dictionary = KINDS[pig.kind]
     var sc := float(kind.scale)
     var tex: Texture2D = pig_textures.get(pig.kind)
-    # 阴影
-    draw_set_transform(pos + Vector2(0, 44 * sc), 0, Vector2(1, 0.25))
-    draw_circle(Vector2.ZERO, 70 * sc, Color(0, 0, 0, 0.22))
+    # 阴影：随跳跃高度缩小并变淡，落地时最实
+    var shadow_scale := 1.0 - 0.35 * jump
+    var shadow_alpha := 0.22 * (1.0 - 0.5 * jump)
+    draw_set_transform(pos + Vector2(0, 44 * sc), 0, Vector2(shadow_scale, 0.25 * shadow_scale))
+    draw_circle(Vector2.ZERO, 70 * sc, Color(0, 0, 0, shadow_alpha))
     draw_set_transform(Vector2.ZERO)
     if tex == null:
         draw_circle(pos, 44 * sc, Color("#f0b6b5"))
     else:
-        var squash := 1.0 - 0.06 * sin(elapsed * 2 + pig.seed)
-        var flip := pig.velocity.x > 0.0 # 素材面朝左，向右移动时翻转
+        var squash := 1.0 - 0.06 * sin(elapsed * 2 + pig.seed) + 0.12 * jump # 跳跃时纵向拉伸
+        var flip := (pig.velocity as Vector2).x > 0.0 # 素材面朝左，向右移动时翻转
         var mod := Color(1.8, 1.8, 1.8) if pig.flash > 0.0 else Color.WHITE
         draw_set_transform(pos, 0, Vector2(-sc if flip else sc, sc * squash))
         draw_texture(tex, -Vector2(tex.get_size()) / 2, mod)
         draw_set_transform(Vector2.ZERO)
-    if pig.hp < int(kind.hp):
-        draw_polyline(PackedVector2Array([pos + Vector2(-26,-22), pos + Vector2(-13,-9),
-            pos + Vector2(-23,5), pos + Vector2(-7,23)]), Color("#4a3322"), 3, true)
+    _draw_damage(pig, pos, kind, sc)
+    if pig.kind == "gold":
+        _draw_gold_glow(pos, sc)
+
+func _draw_damage(pig: Dictionary, pos: Vector2, kind: Dictionary, sc: float) -> void:
+    # 按受伤次数呈现递进裂纹（铁甲猪 3 血可承受两击，裂纹逐级加重）
+    var damage := int(kind.hp) - int(pig.hp)
+    if damage <= 0:
+        return
+    var color := Color("#4a3322")
+    draw_polyline(PackedVector2Array([pos + Vector2(-26, -22) * sc, pos + Vector2(-13, -9) * sc,
+        pos + Vector2(-23, 5) * sc, pos + Vector2(-7, 23) * sc]), color, 3, true)
+    if damage >= 2:
+        draw_polyline(PackedVector2Array([pos + Vector2(24, -24) * sc, pos + Vector2(12, -8) * sc,
+            pos + Vector2(20, 8) * sc, pos + Vector2(6, 26) * sc]), color, 3, true)
+
+func _draw_gold_glow(pos: Vector2, sc: float) -> void:
+    # 金猪呼吸式金色光晕，突出高价值目标
+    var pulse := 0.5 + 0.5 * sin(elapsed * 3.0)
+    for i in range(3):
+        var r := (52.0 + 8.0 * i) * sc
+        var a := 0.14 * (1.0 - i * 0.3) * (0.5 + 0.5 * pulse)
+        draw_arc(pos, r, 0, TAU, 48, Color(1.0, 0.82, 0.3, a), 6.0)
 
 func draw_hammer() -> void:
     # 攻击范围指示：锤子周围的浅色椭圆即判定范围
