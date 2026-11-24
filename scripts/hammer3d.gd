@@ -3,6 +3,8 @@ class_name Hammer3D
 
 ## 第一人称光标锤：单独的透明 3D 视口，随鼠标绘制，局部旋转交给 main.gd。
 const VIEW_SIZE := 256
+const OBJ_PATH := "res://models/hammer.obj"
+static var use_obj := false # 实验开关：true 时用 OBJ 网格替换程序化酒桶锤（默认关，不影响游戏）
 
 func _ready() -> void:
 	size = Vector2i(VIEW_SIZE, VIEW_SIZE)
@@ -68,6 +70,9 @@ func _build() -> void:
 	fill.light_energy = 0.65
 	fill.look_at_from_position(fill.position, Vector3.ZERO)
 	add_child(fill)
+	if use_obj and ResourceLoader.exists(OBJ_PATH):
+		_build_obj_hammer()
+		return
 	var hammer := Node3D.new()
 	# 锤子平放在桌面平面：从上往下看时，锤头在前、锤柄朝玩家方向延伸。
 	hammer.rotation.x = PI / 2.0
@@ -99,6 +104,26 @@ func _build() -> void:
 	# 桶身与手柄之间的铁压圈，让锤头和木柄看起来确实锁在一起。
 	_mesh(hammer, _cylinder(0.17, 0.1), iron, Vector3(0, -0.38, 0))
 	_build_human_hand(hammer)
+
+
+func _build_obj_hammer() -> void:
+	## 实验分支：直接用程序化生成的 models/hammer.obj 当光标锤（锤头 OBJ 自带手套方块，另配 3D 手）
+	var pivot := Node3D.new()
+	pivot.rotation.x = -PI / 2.0 # 平放桌面：局部 -Y（柄方向）映射为世界 +Z（屏幕下方，朝玩家）
+	pivot.rotation.z = -0.48
+	pivot.scale = Vector3.ONE * 3.0
+	pivot.position = Vector3(0.0, 0.0, -0.30)
+	add_child(pivot)
+	var mi := MeshInstance3D.new()
+	mi.mesh = load(OBJ_PATH)
+	pivot.add_child(mi)
+	var hand_holder := Node3D.new()
+	hand_holder.rotation.x = PI / 2.0
+	hand_holder.rotation.z = -0.48
+	hand_holder.scale = Vector3.ONE * 0.8 # 手按酒桶锤尺度设计的，缩小到贴合 OBJ 细柄
+	hand_holder.position = Vector3(0.0, 0.0, 0.02)
+	add_child(hand_holder)
+	_build_human_hand(hand_holder)
 
 
 func _build_human_hand(parent: Node3D) -> void:
