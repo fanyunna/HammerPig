@@ -3400,11 +3400,16 @@ func ui_hover_at(p: Vector2) -> bool:
 	return bill_open or bill_detail >= 0 # 翻账本时手本来就该放下
 
 
+func _draw_aim_reticle() -> void:
+	# 准心画在锤子之上：锤头现在正对命中点，画在下面会被木头盖住
+	if phase != "playing" or ui_hover_at(hammer_position):
+		return
+	var aim_color := Color("#ffe092") if not strike_target(hammer_position).is_empty() else Color(1, 1, 1, 0.65)
+	draw_arc(hammer_position, 7.0, 0.0, TAU, 24, aim_color, 1.5, true)
+	draw_circle(hammer_position, 2.0, aim_color)
+
+
 func draw_hammer() -> void:
-	if phase == "playing" and not ui_hover_at(hammer_position):
-		var aim_color := Color("#ffe092") if not strike_target(hammer_position).is_empty() else Color(1, 1, 1, 0.65)
-		draw_arc(hammer_position, 7.0, 0.0, TAU, 24, aim_color, 1.5, true)
-		draw_circle(hammer_position, 2.0, aim_color)
 	var over := ui_hover_at(get_local_mouse_position())
 	var swing_progress := clampf(1.0 - swing / 0.16, 0.0, 1.0)
 	var punch := 0.0
@@ -3430,9 +3435,18 @@ func draw_hammer() -> void:
 	if hammer_tex != null: # 贴图锤：皮手套握木柄锤，跟随鼠标，挥锤下压+旋转沿用 swing 动画
 		var hs := hammer_tex.get_size()
 		var hfit := 250.0 / maxf(hs.x, hs.y) # 最长边约 250：比原 3D 锤略大，握锤的手也进了画面
-		draw_set_transform(pivot, angle, Vector2(k * hfit, k * hfit))
-		draw_texture(hammer_tex, -hs / 2.0)
+		# 贴图里锤头在左上（约 90,78）、手套在右下——命中点必须对准锤头，不是贴图中心。
+		# 旋转支点放在手套握柄处：挥锤是绕着手腕转，锤头扫出弧线，而不是钉在原地打转。
+		var head_px := Vector2(90, 78)
+		var grip_px := Vector2(195, 235)
+		var sc := k * hfit
+		var tp := hammer_position + (grip_px - head_px) * sc + Vector2(-8, 24) * punch
+		if over:
+			tp += Vector2(58, 46)
+		draw_set_transform(tp, angle, Vector2(sc, sc))
+		draw_texture(hammer_tex, -grip_px)
 		draw_set_transform(Vector2.ZERO)
+		_draw_aim_reticle()
 		return
 	if hammer3d != null:
 		draw_set_transform(pivot, angle, Vector2(k, k))
@@ -3440,6 +3454,7 @@ func draw_hammer() -> void:
 		draw_set_transform(Vector2.ZERO)
 		if SHOW_HAND:
 			draw_shadow_fist(pivot + Vector2(19, 74).rotated(angle), angle)
+		_draw_aim_reticle()
 		return
 	draw_set_transform(pivot, angle, Vector2(k, k))
 	panel(Rect2(11, -2, 17, 100), Color("#5e412f"), 6)
@@ -3450,6 +3465,7 @@ func draw_hammer() -> void:
 	draw_set_transform(Vector2.ZERO)
 	if SHOW_HAND:
 		draw_shadow_fist(pivot + Vector2(19, 74).rotated(angle), angle) # 拳头画在锤子之上，才像真的攥着柄
+	_draw_aim_reticle()
 
 
 ## 一段肢体：从 a 到 b 的锥形胶囊（起点粗 → 终点细），两端补圆当关节
