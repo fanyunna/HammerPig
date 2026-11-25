@@ -12,7 +12,7 @@ const VIEW_SIZE := 192
 
 ## 相机俯角（弧度）。桌面 desk3d 与猪必须用同一档，否则猪会像立在桌面上。
 ## 调试时截图脚本可改 pig3d.cam_pitch_override 一次跑多个角度对照。
-const CAM_PITCH := 0.286 # 16.4°：坐姿相机（桌面俯角 19.4°）下猪几乎侧视，像摆在桌上（原版观感）
+const CAM_PITCH := 0.473 # 27.1°：比桌面俯角（30.1°）浅 3°，猪微微前倾、有一点立体感（原版观感）
 const CAM_DIST := 4.949 # 相机到目标点的距离
 static var cam_pitch_override := 0.0
 

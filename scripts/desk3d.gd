@@ -11,16 +11,17 @@ class_name Desk3D
 
 const VIEW_W := 1280.0
 const VIEW_H := 800.0
-const FOV := 34.0 # 透视视野（度）：窄视野配低机位（fov 必须 < 2×俯角，否则屏幕顶部射线打不到桌面）
+const FOV := 46.0 # 透视视野（度）：窄视野配低机位（fov 必须 < 2×俯角，否则屏幕顶部射线打不到桌面）
 static var pitch_override := 0.0 # 调试用：>0 时覆盖俯角
 static var fov_override := 0.0 # 调试用：>0 时覆盖 FOV
 static var height_override := 0.0 # 调试用：>0 时覆盖 CAM_HEIGHT
 static var back_override := 0.0 # 调试用：>0 时覆盖 CAM_BACK
-## 坐姿相机：眼睛高于桌面 2.6m、坐在桌前缘后 7.8m——"坐在桌子前操作"的第三人称视角。
+## 斜前方低俯角相机：俯角约 30°（对齐原版 Bills Must Be Paid 观感）——眼睛高于桌面
+## 4.2m、坐在桌前 7.5m，近大远小：桌面前缘更宽、往画面深处收窄，能看到桌沿厚度。
 ## 桌子用固定真实尺寸（不再反投影铺屏）：低俯角下才能看到一张完整的桌子。
-const CAM_HEIGHT := 2.6
-const CAM_BACK := 7.8
-const LOOK_AHEAD := 0.55 # 桌心向玩家方向前移的视差补偿（单次反投影的固定偏差）
+const CAM_HEIGHT := 4.2
+const CAM_BACK := 7.5
+const LOOK_AHEAD := 0.55 # 桌心向玩家方向前移的视差补偿（单次反投影的固定偏差，30° 机位手工标定）
 const DESK_W := 7.8 # 桌板固定世界宽（真实大赌桌比例）
 const DESK_D := 4.8 # 桌板固定世界深
 const DESK_THICK := 0.30 # 桌板厚（真实桌板比例，低俯角下侧壁可见）
