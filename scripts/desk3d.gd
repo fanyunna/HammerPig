@@ -221,7 +221,8 @@ func _build_scene() -> void:
 
 	# 桌板尺寸：参考原版《账单必须支付》——桌面占画面中部，四周留空隙：
 	# 顶部露背景带（货架/墙），底部露地板带（玩家站位），左右各露一点桌沿外。
-	var area := Rect2(45.0, 120.0, VIEW_W - 90.0, VIEW_H - 160.0)
+	# 45° 定稿版基础上整体拉远：留边加大一圈（顶 120→180 / 左右 45→90 / 底 40→70）。
+	var area := Rect2(90.0, 180.0, VIEW_W - 180.0, VIEW_H - 250.0)
 	var frame := _desk_frame(area) # 桌板本体
 	var inner := _desk_frame(_pen_rect.grow(76.0)) # 76 ≈ 猪半径 69 + 一点桌沿余量（装饰用）
 	var desk_w: float = frame.w
