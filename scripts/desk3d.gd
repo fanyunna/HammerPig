@@ -11,12 +11,13 @@ class_name Desk3D
 
 const VIEW_W := 1280.0
 const VIEW_H := 800.0
-const FOV := 40.0 # 透视视野（度）：40° 比 30° 长焦透视更自然（近大远小，原版观感）
-const PITCH := 0.785 # 俯角 45°：斜上方观察，桌面纵深透视明显、桌沿厚度可见（用户定稿）
+const FOV := 55.0 # 透视视野（度）：55° 广角——视野更广，环境进画面，像可操作场景而非地图总览
+const PITCH := 0.559 # 俯角 32°：低机位斜俯视，桌面纵深透视强、避免极端鸟瞰（用户定稿）
 static var pitch_override := 0.0 # 调试用：>0 时覆盖 PITCH（截图脚本拿它跑多角度对照原版）
 static var fov_override := 0.0 # 调试用：>0 时覆盖 FOV
 static var dist_override := 0.0 # 调试用：>0 时覆盖 CAM_DIST
-const CAM_DIST := 10.0 # 相机到原点的距离（配合 40° 视野，透视自然不夸张）
+static var area_override := Rect2() # 调试用：非零时覆盖桌板占用的屏幕矩形
+const CAM_DIST := 16.0 # 相机到原点的距离：拉远后桌子变小、四周露出更多房间环境
 const DESK_THICK := 0.34
 const DESK_MARGIN := 0.35 # 桌板比围栏区外扩的世界余量（做桌沿）
 const FLOOR_Y := -2.4
@@ -221,7 +222,7 @@ func _build_scene() -> void:
 
 	# 桌板尺寸：参考原版《账单必须支付》——桌面占画面中部，四周留空隙：
 	# 顶部露背景带（货架/墙），底部露地板带（玩家站位），左右各露一点桌沿外。
-	var area := Rect2(45.0, 120.0, VIEW_W - 90.0, VIEW_H - 160.0)
+	var area := area_override if area_override.size.x > 0.0 else Rect2(80.0, 210.0, VIEW_W - 160.0, VIEW_H - 290.0)
 	var frame := _desk_frame(area) # 桌板本体
 	var inner := _desk_frame(_pen_rect.grow(76.0)) # 76 ≈ 猪半径 69 + 一点桌沿余量（装饰用）
 	var desk_w: float = frame.w
