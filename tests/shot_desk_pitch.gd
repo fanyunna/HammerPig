@@ -1,12 +1,14 @@
 extends SceneTree
 
-## 桌面俯角对照：同一帧游戏画面渲染多个俯角，桌面与猪同步改角度，用于和原版截图比对。
+## 桌面视角对照：45° 高俯视 + 两档透视（宽角近机位 vs 中焦远机位），对照原版截图。
 ## 用法：Godot --path . --script tests/shot_desk_pitch.gd
 
 var game
 
-# 俯角（度）：桌面用的角度；猪比桌面浅 3°，贴近原版里猪略微"立"一点的观感
-const PITCHES_DEG := [60, 67, 75]
+# 定稿验证：45° 俯视 + 40° 视野 + 10m 机位（table edge/装饰随桌深比例放大）
+const VARIANTS := [
+	[45.0, 40.0, 10.0, "a"],
+]
 
 
 func _initialize() -> void:
@@ -22,10 +24,12 @@ func snap(file: String) -> void:
 	print("SAVED ", file)
 
 
-func rebuild_desk(pitch: float) -> void:
+func rebuild_desk(pitch: float, fov: float, dist: float) -> void:
 	if game.desk3d != null:
 		game.desk3d.queue_free()
-	Desk3D.pitch_override = pitch
+	Desk3D.pitch_override = deg_to_rad(pitch)
+	Desk3D.fov_override = fov
+	Desk3D.dist_override = dist
 	var desk := Desk3D.new()
 	game.add_child(desk)
 	desk.build(game.DESK_RECT, game.PIG_BOUNDS)
@@ -46,10 +50,9 @@ func run() -> void:
 	game.game_day = 5
 	game.next_card = 370
 	Input.warp_mouse(game.pigs[3].position)
-	for deg in PITCHES_DEG:
-		var pitch := deg_to_rad(float(deg))
-		rebuild_desk(pitch)
-		for vp in game.pig3d: # 猪必须跟着桌面同档俯角，否则会像立在桌上
-			vp.set_cam_pitch(pitch - deg_to_rad(3.0))
-		await snap("tmp_desk_p%d.png" % deg)
+	for v in VARIANTS:
+		rebuild_desk(v[0], v[1], v[2])
+		for vp in game.pig3d: # 猪同步到桌面俯角（浅 3° 保持一点立体）
+			vp.set_cam_pitch(deg_to_rad(v[0] - 3.0))
+		await snap("tmp_desk_v%s.png" % v[3])
 	quit()

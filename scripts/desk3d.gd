@@ -11,10 +11,12 @@ class_name Desk3D
 
 const VIEW_W := 1280.0
 const VIEW_H := 800.0
-const FOV := 30.0 # 透视视野（度）：越小越像长焦、越"远"（30° 比 38° 的近端放大温和）
-const PITCH := 1.047 # 俯角 60°：桌面明显向后倾斜、有纵深透视，猪立体感最强（2026-11-25 用户选定）
+const FOV := 40.0 # 透视视野（度）：40° 比 30° 长焦透视更自然（近大远小，原版观感）
+const PITCH := 0.785 # 俯角 45°：斜上方观察，桌面纵深透视明显、桌沿厚度可见（用户定稿）
 static var pitch_override := 0.0 # 调试用：>0 时覆盖 PITCH（截图脚本拿它跑多角度对照原版）
-const CAM_DIST := 16.0 # 相机到原点的距离（配合长焦，减小透视夸张）
+static var fov_override := 0.0 # 调试用：>0 时覆盖 FOV
+static var dist_override := 0.0 # 调试用：>0 时覆盖 CAM_DIST
+const CAM_DIST := 10.0 # 相机到原点的距离（配合 40° 视野，透视自然不夸张）
 const DESK_THICK := 0.34
 const DESK_MARGIN := 0.35 # 桌板比围栏区外扩的世界余量（做桌沿）
 const FLOOR_Y := -2.4
@@ -42,8 +44,8 @@ func _felt_texture() -> ImageTexture:
 	n2.frequency = 0.02
 	var size := 256
 	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
-	var dark := Color("#4a2f18")
-	var light := Color("#6e4a2a")
+	var dark := Color("#3a2412")
+	var light := Color("#5e3d20")
 	for y in range(size):
 		for x in range(size):
 			var fuzz := n.get_noise_2d(float(x), float(y)) * 0.5 + 0.5 # 毛绒颗粒
@@ -75,7 +77,7 @@ func _gold_mat() -> StandardMaterial3D:
 
 
 ## 桌面上的一个扁圆盘子（筹码/下注圈用），厚度薄到不影响猪的行走视觉
-func _add_disc(pos: Vector3, radius: float, thick: float, mat: Material) -> void:
+func _add_disc(pos: Vector3, radius: float, thick: float, mat: Material, parent: Node3D = null) -> void:
 	var node := MeshInstance3D.new()
 	var mesh := CylinderMesh.new()
 	mesh.top_radius = radius
@@ -85,10 +87,10 @@ func _add_disc(pos: Vector3, radius: float, thick: float, mat: Material) -> void
 	node.mesh = mesh
 	node.material_override = mat
 	node.position = pos
-	add_child(node)
+	(parent if parent != null else self).add_child(node)
 
 
-func _add_box(pos: Vector3, size: Vector3, mat: Material, rot_y := 0.0) -> void:
+func _add_box(pos: Vector3, size: Vector3, mat: Material, rot_y := 0.0, parent: Node3D = null) -> void:
 	var node := MeshInstance3D.new()
 	var mesh := BoxMesh.new()
 	mesh.size = size
@@ -96,10 +98,10 @@ func _add_box(pos: Vector3, size: Vector3, mat: Material, rot_y := 0.0) -> void:
 	node.material_override = mat
 	node.position = pos
 	node.rotation.y = rot_y
-	add_child(node)
+	(parent if parent != null else self).add_child(node)
 
 
-func _add_ring(pos: Vector3, radius: float, mat: Material, tube := 0.012) -> void:
+func _add_ring(pos: Vector3, radius: float, mat: Material, tube := 0.012, parent: Node3D = null) -> void:
 	var node := MeshInstance3D.new()
 	var mesh := TorusMesh.new()
 	mesh.inner_radius = maxf(0.01, radius - tube)
@@ -110,15 +112,15 @@ func _add_ring(pos: Vector3, radius: float, mat: Material, tube := 0.012) -> voi
 	node.material_override = mat
 	node.position = pos
 	node.rotation.x = PI / 2.0
-	add_child(node)
+	(parent if parent != null else self).add_child(node)
 
 
-func _add_chip_stack(x: float, z: float, count: int, mats: Array[Material]) -> void:
+func _add_chip_stack(x: float, z: float, count: int, mats: Array[Material], parent: Node3D = null) -> void:
 	for i in range(count):
 		var y := 0.045 + float(i) * 0.045
 		var mat: Material = mats[i % mats.size()]
-		_add_disc(Vector3(x, y, z), 0.15, 0.04, mat)
-		_add_box(Vector3(x, y + 0.021, z - 0.09), Vector3(0.055, 0.006, 0.022), _plain_mat(Color("#f2e8ce"), 0.6))
+		_add_disc(Vector3(x, y, z), 0.15, 0.04, mat, parent)
+		_add_box(Vector3(x, y + 0.021, z - 0.09), Vector3(0.055, 0.006, 0.022), _plain_mat(Color("#f2e8ce"), 0.6), 0.0, parent)
 
 
 func _ready() -> void:
@@ -155,8 +157,8 @@ func _wood_texture() -> ImageTexture:
 	n.frequency = 0.03
 	var size := 256
 	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
-	var dark := Color("#9c7852")
-	var light := Color("#ab8760")
+	var dark := Color("#b09068")
+	var light := Color("#c6a87c")
 	for y in range(size):
 		for x in range(size):
 			# 年轮：沿 x 方向的长条，低频噪声缓慢扭曲（扭曲幅度太大就成蛇皮了）
@@ -183,7 +185,10 @@ func _build_scene() -> void:
 	_cam.projection = Camera3D.PROJECTION_PERSPECTIVE
 	_cam.fov = FOV
 	var pitch := pitch_override if pitch_override > 0.0 else PITCH
-	_cam.position = Vector3(0.0, CAM_DIST * sin(pitch), CAM_DIST * cos(pitch))
+	var dist := dist_override if dist_override > 0.0 else CAM_DIST
+	var fov := fov_override if fov_override > 0.0 else FOV
+	_cam.fov = fov
+	_cam.position = Vector3(0.0, dist * sin(pitch), dist * cos(pitch))
 	_cam.look_at_from_position(_cam.position, Vector3.ZERO)
 	_cam.current = true
 	add_child(_cam)
@@ -192,7 +197,7 @@ func _build_scene() -> void:
 	var key := DirectionalLight3D.new()
 	key.position = Vector3(4.0, 7.0, 5.0)
 	key.look_at_from_position(key.position, Vector3.ZERO)
-	key.light_energy = 1.15
+	key.light_energy = 1.35
 	add_child(key)
 
 	var fill := DirectionalLight3D.new()
@@ -222,49 +227,53 @@ func _build_scene() -> void:
 	var desk_w: float = frame.w
 	var desk_d: float = frame.d
 	var desk_cz: float = frame.cz
+	# 俯角越浅，同一屏幕矩形反投影出的世界尺度越大——桌沿/装饰尺寸必须跟着放大，
+	# 否则 45° 下 0.34m 的桌沿薄得像纸（原版桌沿厚度约占画面高 5%）。
+	var sc := clampf(desk_d / 5.5, 1.0, 3.0)
+	var thick: float = DESK_THICK * sc
 	var top := MeshInstance3D.new()
 	var box := BoxMesh.new()
-	box.size = Vector3(desk_w, DESK_THICK, desk_d)
+	box.size = Vector3(desk_w, thick, desk_d)
 	top.mesh = box
 	top.material_override = _wood_mat(desk_w / 1.2, desk_d / 1.2, 0.42)
-	top.position = Vector3(0.0, -DESK_THICK / 2.0, desk_cz)
+	top.position = Vector3(0.0, -thick / 2.0, desk_cz)
 	add_child(top)
 
 	# 深色木台面：略微内缩，让外圈胡桃木桌沿和黄铜细线露出来。
 	var felt := MeshInstance3D.new()
 	var felt_box := BoxMesh.new()
-	felt_box.size = Vector3(desk_w - 0.42, 0.035, desk_d - 0.42)
+	felt_box.size = Vector3(desk_w - 0.42 * sc, 0.035 * sc, desk_d - 0.42 * sc)
 	felt.mesh = felt_box
 	felt.material_override = _felt_mat(desk_w / 1.2, desk_d / 1.2)
-	felt.position = Vector3(0.0, 0.012, desk_cz)
+	felt.position = Vector3(0.0, 0.012 * sc, desk_cz)
 	add_child(felt)
 
 	# 深色木质桌沿/扶手，围住整张赌桌。
 	var rim := MeshInstance3D.new()
 	var rim_box := BoxMesh.new()
-	rim_box.size = Vector3(desk_w + 0.28, DESK_THICK * 0.85, desk_d + 0.28)
+	rim_box.size = Vector3(desk_w + 0.28 * sc, thick * 0.85, desk_d + 0.28 * sc)
 	rim.mesh = rim_box
 	rim.material_override = _wood_mat(desk_w / 1.2, desk_d / 1.2, 0.38)
-	rim.position = top.position + Vector3(0.0, -DESK_THICK * 0.55, 0.0)
+	rim.position = top.position + Vector3(0.0, -thick * 0.55, 0.0)
 	add_child(rim)
 	var rail_mat := _wood_mat(desk_w / 1.2, desk_d / 1.2, 0.34)
 	var gold := _gold_mat()
-	var rail_y := 0.09
-	var rail_z := desk_d / 2.0 - 0.06
-	var rail_x := desk_w / 2.0 - 0.06
-	_add_box(Vector3(0.0, rail_y, desk_cz - rail_z), Vector3(desk_w + 0.08, 0.14, 0.30), rail_mat)
-	_add_box(Vector3(0.0, rail_y, desk_cz + rail_z), Vector3(desk_w + 0.08, 0.14, 0.30), rail_mat)
-	_add_box(Vector3(-rail_x, rail_y, desk_cz), Vector3(0.30, 0.14, desk_d - 0.28), rail_mat)
-	_add_box(Vector3(rail_x, rail_y, desk_cz), Vector3(0.30, 0.14, desk_d - 0.28), rail_mat)
-	_add_box(Vector3(0.0, rail_y + 0.073, desk_cz - rail_z + 0.16), Vector3(desk_w - 0.12, 0.012, 0.018), gold)
-	_add_box(Vector3(0.0, rail_y + 0.073, desk_cz + rail_z - 0.16), Vector3(desk_w - 0.12, 0.012, 0.018), gold)
-	_add_box(Vector3(-rail_x + 0.16, rail_y + 0.073, desk_cz), Vector3(0.018, 0.012, desk_d - 0.40), gold)
-	_add_box(Vector3(rail_x - 0.16, rail_y + 0.073, desk_cz), Vector3(0.018, 0.012, desk_d - 0.40), gold)
+	var rail_y := 0.09 * sc
+	var rail_z := desk_d / 2.0 - 0.06 * sc
+	var rail_x := desk_w / 2.0 - 0.06 * sc
+	_add_box(Vector3(0.0, rail_y, desk_cz - rail_z), Vector3(desk_w + 0.08 * sc, 0.14 * sc, 0.30 * sc), rail_mat)
+	_add_box(Vector3(0.0, rail_y, desk_cz + rail_z), Vector3(desk_w + 0.08 * sc, 0.14 * sc, 0.30 * sc), rail_mat)
+	_add_box(Vector3(-rail_x, rail_y, desk_cz), Vector3(0.30 * sc, 0.14 * sc, desk_d - 0.28 * sc), rail_mat)
+	_add_box(Vector3(rail_x, rail_y, desk_cz), Vector3(0.30 * sc, 0.14 * sc, desk_d - 0.28 * sc), rail_mat)
+	_add_box(Vector3(0.0, rail_y + 0.073 * sc, desk_cz - rail_z + 0.16 * sc), Vector3(desk_w - 0.12 * sc, 0.012 * sc, 0.018 * sc), gold)
+	_add_box(Vector3(0.0, rail_y + 0.073 * sc, desk_cz + rail_z - 0.16 * sc), Vector3(desk_w - 0.12 * sc, 0.012 * sc, 0.018 * sc), gold)
+	_add_box(Vector3(-rail_x + 0.16 * sc, rail_y + 0.073 * sc, desk_cz), Vector3(0.018 * sc, 0.012 * sc, desk_d - 0.40 * sc), gold)
+	_add_box(Vector3(rail_x - 0.16 * sc, rail_y + 0.073 * sc, desk_cz), Vector3(0.018 * sc, 0.012 * sc, desk_d - 0.40 * sc), gold)
 
-	_decorate(inner) # 桌边账单纸、散落零钱和马克杯，锚定猪活动区，铺满后仍留在画面内
+	_decorate(inner, sc) # 桌边账单纸、散落零钱和马克杯，锚定猪活动区
 
-	# 桌腿：视角放远后桌子下沿会进画面，得有腿撑着
-	var leg_h := -FLOOR_Y - DESK_THICK + 0.1
+	# 桌腿：45° 俯视时桌沿和桌腿都会进画面，得有腿撑着
+	var leg_h := -FLOOR_Y - thick + 0.1
 	var leg_mat := _wood_mat(1.5, 1.5, 0.7)
 	leg_mat.albedo_color = Color("#7a5a3a")
 	for i in range(4):
@@ -272,16 +281,16 @@ func _build_scene() -> void:
 		var sz := -1.0 if i < 2 else 1.0
 		var leg := MeshInstance3D.new()
 		var lm := CylinderMesh.new()
-		lm.top_radius = 0.18
-		lm.bottom_radius = 0.15
+		lm.top_radius = 0.18 * sc
+		lm.bottom_radius = 0.15 * sc
 		lm.height = leg_h
 		lm.radial_segments = 12
 		leg.mesh = lm
 		leg.material_override = leg_mat
 		leg.position = Vector3(
-			sx * (desk_w / 2.0 - 0.5),
+			sx * (desk_w / 2.0 - 0.5 * sc),
 			FLOOR_Y + leg_h / 2.0,
-			desk_cz + sz * (desk_d / 2.0 - 0.45)
+			desk_cz + sz * (desk_d / 2.0 - 0.45 * sc)
 		)
 		add_child(leg)
 
@@ -300,22 +309,26 @@ func _desk_frame(area: Rect2) -> Dictionary:
 
 ## 赌桌的桌面装饰：沿桌沿一圈金色细线、中央两圈下注环、四角筹码堆、散落的几张牌。
 ## 全部摆在 y≈0.014 的桌面上，压得很薄，猪走过去不会被穿模。
-func _decorate(frame: Dictionary) -> void:
-	var w: float = frame.w
-	var d: float = frame.d
-	var cz: float = frame.cz
+func _decorate(frame: Dictionary, sc := 1.0) -> void:
+	# 装饰整体装进一个 sc 倍缩放容器：局部坐标 = 世界坐标 / sc，尺寸随桌深自动放大
+	var decor := Node3D.new()
+	decor.scale = Vector3.ONE * sc
+	add_child(decor)
+	var w: float = frame.w / sc
+	var d: float = frame.d / sc
+	var cz: float = frame.cz / sc
 	var y := 0.018
 	var far_z := cz - d / 2.0 + 0.55
 	var paper_mat := _plain_mat(Color("#e8ddc4"), 0.88)
 	var paper_shadow := _plain_mat(Color("#a58c67"), 0.9)
 	var gold_mat := _gold_mat()
 	# 中央下注环与靠玩家一侧的下注位：它们是贴面装饰，不会挡住猪的移动或点击。
-	_add_ring(Vector3(0.0, y + 0.020, cz), 0.82, gold_mat, 0.014)
-	_add_ring(Vector3(0.0, y + 0.020, cz), 1.08, gold_mat, 0.009)
-	_add_ring(Vector3(0.0, y + 0.020, cz), 0.20, gold_mat, 0.010)
+	_add_ring(Vector3(0.0, y + 0.020, cz), 0.82, gold_mat, 0.014, decor)
+	_add_ring(Vector3(0.0, y + 0.020, cz), 1.08, gold_mat, 0.009, decor)
+	_add_ring(Vector3(0.0, y + 0.020, cz), 0.20, gold_mat, 0.010, decor)
 	for i in range(5):
 		var slot_x := lerpf(-1.35, 1.35, float(i) / 4.0)
-		_add_ring(Vector3(slot_x, y + 0.020, cz + d * 0.28), 0.12, gold_mat, 0.008)
+		_add_ring(Vector3(slot_x, y + 0.020, cz + d * 0.28), 0.12, gold_mat, 0.008, decor)
 	# 桌角散叠的催缴单，顶纸印一道项目红线。
 	for i in range(3):
 		var sheet := MeshInstance3D.new()
@@ -325,24 +338,24 @@ func _decorate(frame: Dictionary) -> void:
 		sheet.material_override = paper_shadow if i == 0 else paper_mat
 		sheet.position = Vector3(-w / 2.0 + 0.72 + float(i) * 0.08, y + float(i) * 0.02, far_z + float(i) * 0.06)
 		sheet.rotation.y = -0.12 + float(i) * 0.10
-		add_child(sheet)
-	_add_box(Vector3(-w / 2.0 + 0.72, y + 0.067, far_z + 0.02), Vector3(0.55, 0.008, 0.045), _plain_mat(Color("#b84d3a"), 0.8), -0.12)
+		decor.add_child(sheet)
+	_add_box(Vector3(-w / 2.0 + 0.72, y + 0.067, far_z + 0.02), Vector3(0.55, 0.008, 0.045), _plain_mat(Color("#b84d3a"), 0.8), -0.12, decor)
 	# 金币与筹码混放，暗示玩家刚押下去的一笔钱。
 	var coin_mat := _gold_mat()
 	for i in range(4):
-		_add_disc(Vector3(w / 2.0 - 0.72 + float(i % 2) * 0.13, y + 0.025 + float(i / 2) * 0.035, far_z + 0.54 + float(i / 2) * 0.10), 0.095, 0.035, coin_mat)
+		_add_disc(Vector3(w / 2.0 - 0.72 + float(i % 2) * 0.13, y + 0.025 + float(i / 2) * 0.035, far_z + 0.54 + float(i / 2) * 0.10), 0.095, 0.035, coin_mat, decor)
 	var chip_mats: Array[Material] = [
 		_plain_mat(Color("#a63832"), 0.45),
 		_plain_mat(Color("#233e70"), 0.45),
 		_plain_mat(Color("#262624"), 0.5),
 	]
-	_add_chip_stack(w / 2.0 - 0.62, far_z + 1.00, 5, chip_mats)
-	_add_chip_stack(w / 2.0 - 1.02, far_z + 1.28, 3, chip_mats)
+	_add_chip_stack(w / 2.0 - 0.62, far_z + 1.00, 5, chip_mats, decor)
+	_add_chip_stack(w / 2.0 - 1.02, far_z + 1.28, 3, chip_mats, decor)
 	# 两张斜放的扑克牌：暖白牌面配红/黑背纹，强化赌场桌的识别度。
 	var card_red := _plain_mat(Color("#a83b32"), 0.6)
 	var card_black := _plain_mat(Color("#26302d"), 0.7)
 	var card_x := w / 2.0 - 1.55
 	var card_z := far_z + 0.92
-	_add_box(Vector3(card_x - 0.12, y + 0.027, card_z), Vector3(0.44, 0.018, 0.66), card_red, -0.18)
-	_add_box(Vector3(card_x + 0.17, y + 0.038, card_z + 0.05), Vector3(0.44, 0.018, 0.66), paper_mat, 0.12)
-	_add_box(Vector3(card_x + 0.17, y + 0.050, card_z + 0.05), Vector3(0.20, 0.006, 0.24), card_black, 0.12)
+	_add_box(Vector3(card_x - 0.12, y + 0.027, card_z), Vector3(0.44, 0.018, 0.66), card_red, -0.18, decor)
+	_add_box(Vector3(card_x + 0.17, y + 0.038, card_z + 0.05), Vector3(0.44, 0.018, 0.66), paper_mat, 0.12, decor)
+	_add_box(Vector3(card_x + 0.17, y + 0.050, card_z + 0.05), Vector3(0.20, 0.006, 0.24), card_black, 0.12, decor)
