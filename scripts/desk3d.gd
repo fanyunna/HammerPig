@@ -214,10 +214,31 @@ func _build_scene() -> void:
 	floor_node.rotation.x = -PI / 2.0
 	floor_node.position.y = FLOOR_Y
 	var fm := StandardMaterial3D.new()
-	fm.albedo_color = Color("#120b07") # 酒馆地板：压到近黑，和高亮木桌拉开对比（原版式构图）
+	fm.albedo_color = Color("#1d110a") # 酒馆地板：压暗但保留暖棕，和桌子拉开层次
 	fm.roughness = 0.9
 	floor_node.material_override = fm
 	add_child(floor_node)
+
+	# 背景墙：桌子后方的竖直墙面 —— 顶部露出的是“墙”而不是虚空/天花板，
+	# 桌子落地在房间里（用户反馈：背景像天花板、桌子像悬空）。
+	# 位置/尺寸在桌板算出来之后定（要贴着桌沿后方），先建节点后摆位。
+	var wall := MeshInstance3D.new()
+	var wall_mesh := PlaneMesh.new()
+	wall_mesh.size = Vector2(80.0, 8.0)
+	wall.mesh = wall_mesh
+	wall.rotation.x = PI / 2.0 # PlaneMesh 默认朝上，转 90° 正面朝相机(+z)
+	var wm := _wood_mat(6.0, 1.2, 0.85)
+	wm.albedo_color = Color(0.52, 0.38, 0.30) # 木纹乘暗成暖棕墙板，比桌沿暗一档
+	wall.material_override = wm
+	add_child(wall)
+
+	# 踢脚线：墙根一条深色横带，墙和地板的交界才不会糊成一片
+	var skirt := MeshInstance3D.new()
+	var skirt_mesh := BoxMesh.new()
+	skirt_mesh.size = Vector3(80.0, 0.42, 0.10)
+	skirt.mesh = skirt_mesh
+	skirt.material_override = _plain_mat(Color("#120a06"), 0.85)
+	add_child(skirt)
 
 	# 桌板尺寸：参考原版《账单必须支付》——桌面占画面中部，四周留空隙：
 	# 顶部露背景带（货架/墙），底部露地板带（玩家站位），左右各露一点桌沿外。
@@ -232,6 +253,9 @@ func _build_scene() -> void:
 	# 否则 45° 下 0.34m 的桌沿薄得像纸（原版桌沿厚度约占画面高 5%）。
 	var sc := clampf(desk_d / 5.5, 1.0, 3.0)
 	var thick: float = DESK_THICK * sc
+	# 墙贴着桌子后方 1.4m，踢脚线压在墙根
+	wall.position = Vector3(0.0, 0.6, desk_cz - desk_d / 2.0 - 1.4)
+	skirt.position = Vector3(0.0, FLOOR_Y + 0.21, desk_cz - desk_d / 2.0 - 1.34)
 	var top := MeshInstance3D.new()
 	var box := BoxMesh.new()
 	box.size = Vector3(desk_w, thick, desk_d)
