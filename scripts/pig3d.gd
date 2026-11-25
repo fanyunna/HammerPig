@@ -12,7 +12,7 @@ const VIEW_SIZE := 192
 
 ## 相机俯角（弧度）。桌面 desk3d 与猪必须用同一档，否则猪会像立在桌面上。
 ## 调试时截图脚本可改 pig3d.cam_pitch_override 一次跑多个角度对照。
-const CAM_PITCH := 0.473 # 27.1°：比桌面俯角（30.1°）浅 3°，猪微微前倾、有一点立体感（原版观感）
+const CAM_PITCH := 1.239 # 71°：比桌面俯角（74°）浅 3°，俯视看到猪背/头顶（原版观感）
 const CAM_DIST := 4.949 # 相机到目标点的距离
 static var cam_pitch_override := 0.0
 
@@ -30,6 +30,7 @@ var _bandana: Node3D # 红三角巾（"bandana": true）
 var _star: Node3D # 胸前警长星（"star": true）
 var _body_base_scale := Vector3(1.13, 0.99, 1.04) # 轻微不对称，手工陶器不会是完美椭球
 static var _grain_tex: ImageTexture # 釉面颗粒法线贴图（8 只猪共用一份）
+static var _yaw_seed := 0 # 逐只微偏转的种子：大部分猪背对镜头，略带随机朝向（原版观感）
 var _base_color := Color("#f7c2bf") # 陶瓷粉
 var _hurt_color := Color("#d98f95") # 裂了以后暗一号
 
@@ -68,6 +69,10 @@ func _build_scene() -> void:
 
 	_root3d = Node3D.new()
 	_root3d.position = Vector3(0.0, -0.05, 0.0)
+	# 原版俯视观感：镜头看到的是猪背/头顶（耳朵朝上），不是脸。
+	# 转体 180° 背对镜头，再按种子微偏转 ±0.4rad，猪群朝向略有变化不呆板。
+	_yaw_seed += 1
+	_root3d.rotation.y = PI + (float(_yaw_seed % 5) - 2.0) * 0.2
 	add_child(_root3d)
 	_build_bank(_root3d)
 
