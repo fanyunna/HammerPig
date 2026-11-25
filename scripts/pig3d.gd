@@ -10,7 +10,14 @@ class_name Pig3D
 ## 24 只 × 192² 约 0.88M 像素/帧，保持在可控范围内。
 const VIEW_SIZE := 192
 
+## 相机俯角（弧度）。桌面 desk3d 与猪必须用同一档，否则猪会像立在桌面上。
+## 调试时截图脚本可改 pig3d.cam_pitch_override 一次跑多个角度对照。
+const CAM_PITCH := 1.012 # 58°：比桌面 60° 浅 3°，猪略微"立"一点才有立体感（原版观感）
+const CAM_DIST := 4.949 # 相机到目标点的距离
+static var cam_pitch_override := 0.0
+
 var _root3d: Node3D
+var _cam: Camera3D # 调试时可运行时改俯角（对照桌面角度）
 var _body: MeshInstance3D
 var _body_mat: StandardMaterial3D
 var _accent_mat: StandardMaterial3D # 鼻 / 耳 / 腿 / 尾：整体换色时一起换，否则会出现粉鼻金身
@@ -39,7 +46,9 @@ func _build_scene() -> void:
 	var cam := Camera3D.new()
 	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
 	cam.size = 2.9
-	cam.position = Vector3(0.0, 4.7, 1.55) # 约 72° 俯视：对齐桌面 75° 俯角（原版风格，看到背与投币口为主）
+	_cam = cam
+	var pitch := cam_pitch_override if cam_pitch_override > 0.0 else CAM_PITCH
+	cam.position = Vector3(0.0, CAM_DIST * sin(pitch), CAM_DIST * cos(pitch))
 	cam.look_at_from_position(cam.position, Vector3(0.0, 0.08, 0.0))
 	cam.current = true
 	add_child(cam)
@@ -61,6 +70,14 @@ func _build_scene() -> void:
 	_root3d.position = Vector3(0.0, -0.05, 0.0)
 	add_child(_root3d)
 	_build_bank(_root3d)
+
+
+## 运行时改俯角：截图脚本用它把猪和桌面拉到同一档角度做对照
+func set_cam_pitch(pitch: float) -> void:
+	if _cam == null:
+		return
+	_cam.position = Vector3(0.0, CAM_DIST * sin(pitch), CAM_DIST * cos(pitch))
+	_cam.look_at_from_position(_cam.position, Vector3(0.0, 0.08, 0.0))
 
 
 ## 釉面颗粒：用 simplex 噪声的梯度现场算一张法线贴图，让表面不再是完美光滑的塑料感

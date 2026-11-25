@@ -1,11 +1,12 @@
 extends SceneTree
 
-## 桌面俯角对照：同一帧游戏画面渲染 5 个俯角，用于和原版《账单必须支付》截图比对。
+## 桌面俯角对照：同一帧游戏画面渲染多个俯角，桌面与猪同步改角度，用于和原版截图比对。
 ## 用法：Godot --path . --script tests/shot_desk_pitch.gd
 
 var game
 
-const PITCHES := [0.70, 0.79, 0.87, 0.96, 1.047] # 40° / 45° / 50° / 55° / 60°
+# 俯角（度）：桌面用的角度；猪比桌面浅 3°，贴近原版里猪略微"立"一点的观感
+const PITCHES_DEG := [60, 67, 75]
 
 
 func _initialize() -> void:
@@ -45,7 +46,10 @@ func run() -> void:
 	game.game_day = 5
 	game.next_card = 370
 	Input.warp_mouse(game.pigs[3].position)
-	for pitch in PITCHES:
+	for deg in PITCHES_DEG:
+		var pitch := deg_to_rad(float(deg))
 		rebuild_desk(pitch)
-		await snap("tmp_desk_p%d.png" % int(round(rad_to_deg(pitch))))
+		for vp in game.pig3d: # 猪必须跟着桌面同档俯角，否则会像立在桌上
+			vp.set_cam_pitch(pitch - deg_to_rad(3.0))
+		await snap("tmp_desk_p%d.png" % deg)
 	quit()

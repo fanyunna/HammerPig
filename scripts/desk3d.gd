@@ -12,7 +12,7 @@ class_name Desk3D
 const VIEW_W := 1280.0
 const VIEW_H := 800.0
 const FOV := 30.0 # 透视视野（度）：越小越像长焦、越"远"（30° 比 38° 的近端放大温和）
-const PITCH := 1.309 # 俯角 75°：接近垂直俯视（原版实测硬币椭圆比 ≈0.95 → 72-78°），保留一点立体感
+const PITCH := 1.047 # 俯角 60°：桌面明显向后倾斜、有纵深透视，猪立体感最强（2026-11-25 用户选定）
 static var pitch_override := 0.0 # 调试用：>0 时覆盖 PITCH（截图脚本拿它跑多角度对照原版）
 const CAM_DIST := 16.0 # 相机到原点的距离（配合长焦，减小透视夸张）
 const DESK_THICK := 0.34
