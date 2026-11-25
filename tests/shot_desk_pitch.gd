@@ -1,15 +1,13 @@
 extends SceneTree
 
-## 桌面视角对照：镜头更远、机位更低、视野更广，避免极端鸟瞰。
+## 桌面视角对照：45° 高俯视 + 两档透视（宽角近机位 vs 中焦远机位），对照原版截图。
 ## 用法：Godot --path . --script tests/shot_desk_pitch.gd
 
 var game
 
-# [fov, height, back, tag] —— 对齐原版：近垂直俯视铺屏（俯角 = atan((h+0.15)/back)）
+# 定稿验证：45° 俯视 + 40° 视野 + 10m 机位（table edge/装饰随桌深比例放大）
 const VARIANTS := [
-	[40.0, 5.5, 2.0, "a"], # 70°
-	[40.0, 7.0, 2.0, "b"], # 74°
-	[40.0, 7.55, 1.6, "c"], # 78°
+	[45.0, 40.0, 10.0, "a"],
 ]
 
 
@@ -26,12 +24,12 @@ func snap(file: String) -> void:
 	print("SAVED ", file)
 
 
-func rebuild_desk(fov: float, h: float, back: float) -> void:
+func rebuild_desk(pitch: float, fov: float, dist: float) -> void:
 	if game.desk3d != null:
 		game.desk3d.queue_free()
+	Desk3D.pitch_override = deg_to_rad(pitch)
 	Desk3D.fov_override = fov
-	Desk3D.height_override = h
-	Desk3D.back_override = back
+	Desk3D.dist_override = dist
 	var desk := Desk3D.new()
 	game.add_child(desk)
 	desk.build(game.DESK_RECT, game.PIG_BOUNDS)
@@ -54,8 +52,7 @@ func run() -> void:
 	Input.warp_mouse(game.pigs[3].position)
 	for v in VARIANTS:
 		rebuild_desk(v[0], v[1], v[2])
-		var pitch := atan((v[1] + 0.15) / v[2]) # 相机实际俯角（由高度/距离推出）
 		for vp in game.pig3d: # 猪同步到桌面俯角（浅 3° 保持一点立体）
-			vp.set_cam_pitch(pitch - deg_to_rad(3.0))
+			vp.set_cam_pitch(deg_to_rad(v[0] - 3.0))
 		await snap("tmp_desk_v%s.png" % v[3])
 	quit()

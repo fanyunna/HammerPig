@@ -11,19 +11,15 @@ class_name Desk3D
 
 const VIEW_W := 1280.0
 const VIEW_H := 800.0
-const FOV := 40.0 # 透视视野（度）：陡俯角下留一点透视收敛（远边比近边略窄，原版观感）
-static var pitch_override := 0.0 # 调试用：>0 时覆盖俯角
+const FOV := 40.0 # 透视视野（度）：40° 比 30° 长焦透视更自然（近大远小，原版观感）
+const PITCH := 0.785 # 俯角 45°：斜上方观察，桌面纵深透视明显、桌沿厚度可见（用户定稿）
+static var pitch_override := 0.0 # 调试用：>0 时覆盖 PITCH（截图脚本拿它跑多角度对照原版）
 static var fov_override := 0.0 # 调试用：>0 时覆盖 FOV
-static var height_override := 0.0 # 调试用：>0 时覆盖 CAM_HEIGHT
-static var back_override := 0.0 # 调试用：>0 时覆盖 CAM_BACK
-## 俯视铺屏相机：接近垂直俯视（约 74°），桌子按屏幕四角反投影铺满整幅画面、桌沿
-## 全部延伸出画面——原版观感：整块木桌面就是背景，看不到桌子边界，只看到猪背。
-const CAM_HEIGHT := 7.0
-const CAM_BACK := 2.0
-const LOOK_AHEAD := 0.55 # 桌心向玩家方向前移的视差补偿（单次反投影的固定偏差，手工标定）
-const DESK_MARGIN := 0.9 # 桌沿出画余量：桌边在屏幕外再延伸的距离
-const DESK_THICK := 0.30 # 桌板厚（桌沿出画后基本不可见，保留给桌腿定位）
-const FLOOR_Y := -0.78 # 地板：桌腿立在地板上
+static var dist_override := 0.0 # 调试用：>0 时覆盖 CAM_DIST
+const CAM_DIST := 10.0 # 相机到原点的距离（配合 40° 视野，透视自然不夸张）
+const DESK_THICK := 0.34
+const DESK_MARGIN := 0.35 # 桌板比围栏区外扩的世界余量（做桌沿）
+const FLOOR_Y := -2.4
 
 var _desk_rect := Rect2()
 var _pen_rect := Rect2()
@@ -161,8 +157,8 @@ func _wood_texture() -> ImageTexture:
 	n.frequency = 0.03
 	var size := 256
 	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
-	var dark := Color("#7d5f3c")
-	var light := Color("#96774e")
+	var dark := Color("#b09068")
+	var light := Color("#c6a87c")
 	for y in range(size):
 		for x in range(size):
 			# 年轮：沿 x 方向的长条，低频噪声缓慢扭曲（扭曲幅度太大就成蛇皮了）
@@ -185,26 +181,17 @@ func _wood_mat(scale_u: float, scale_v: float, rough := 0.62) -> StandardMateria
 
 
 func _build_scene() -> void:
-	# 俯视铺屏相机：接近垂直俯视。位置由"高度 + 桌前距离"定义，不用抽象的俯角/半径。
 	_cam = Camera3D.new()
 	_cam.projection = Camera3D.PROJECTION_PERSPECTIVE
-	var h := height_override if height_override > 0.0 else CAM_HEIGHT
-	var back := back_override if back_override > 0.0 else CAM_BACK
+	_cam.fov = FOV
+	var pitch := pitch_override if pitch_override > 0.0 else PITCH
+	var dist := dist_override if dist_override > 0.0 else CAM_DIST
 	var fov := fov_override if fov_override > 0.0 else FOV
 	_cam.fov = fov
-	# 单次反投影对齐：相机先对 z=0 摆放，取猪活动区反投影中心作为对准中心。
-	# （迭代会震荡发散：相机移动后反投影中心跳变，不能反复逼近）
-	_cam.position = Vector3(0.0, h, back)
-	_cam.look_at_from_position(_cam.position, Vector3(0.0, -0.15, 0.0))
+	_cam.position = Vector3(0.0, dist * sin(pitch), dist * cos(pitch))
+	_cam.look_at_from_position(_cam.position, Vector3.ZERO)
 	_cam.current = true
 	add_child(_cam)
-	_cam.force_update_transform()
-	var pen_frame: Dictionary = _desk_frame(_pen_rect)
-	var aim_cz: float = pen_frame.cz
-	aim_cz += LOOK_AHEAD # 视差补偿：猪群中心贴桌面下沿时的修正量（手工标定）
-	# 把相机挪到对准中心
-	_cam.position = Vector3(0.0, h, aim_cz + back)
-	_cam.look_at_from_position(_cam.position, Vector3(0.0, -0.15, aim_cz))
 	_cam.force_update_transform()
 
 	var key := DirectionalLight3D.new()
@@ -232,16 +219,18 @@ func _build_scene() -> void:
 	floor_node.material_override = fm
 	add_child(floor_node)
 
-	# 桌板：反投影铺屏——屏幕四角打到桌面平面，桌子按四角包围盒外扩 DESK_MARGIN 取尺寸，
-	# 桌沿全部延伸出画面（原版观感：整块木桌面就是背景，看不到桌子边界）。
-	var ca := _screen_to_desk(Vector2(0.0, 0.0))
-	var cb := _screen_to_desk(Vector2(VIEW_W, 0.0))
-	var cc := _screen_to_desk(Vector2(0.0, VIEW_H))
-	var cd := _screen_to_desk(Vector2(VIEW_W, VIEW_H))
-	var desk_cz: float = (min(minf(ca.z, cb.z), minf(cc.z, cd.z)) + max(maxf(ca.z, cb.z), maxf(cc.z, cd.z))) / 2.0
-	var desk_w: float = max(maxf(ca.x, cb.x), maxf(cc.x, cd.x)) - min(minf(ca.x, cb.x), minf(cc.x, cd.x)) + DESK_MARGIN * 2.0
-	var desk_d: float = max(maxf(ca.z, cb.z), maxf(cc.z, cd.z)) - min(minf(ca.z, cb.z), minf(cc.z, cd.z)) + DESK_MARGIN * 2.0
-	var thick := DESK_THICK
+	# 桌板尺寸：参考原版《账单必须支付》——桌面占画面中部，四周留空隙：
+	# 顶部露背景带（货架/墙），底部露地板带（玩家站位），左右各露一点桌沿外。
+	var area := Rect2(45.0, 120.0, VIEW_W - 90.0, VIEW_H - 160.0)
+	var frame := _desk_frame(area) # 桌板本体
+	var inner := _desk_frame(_pen_rect.grow(76.0)) # 76 ≈ 猪半径 69 + 一点桌沿余量（装饰用）
+	var desk_w: float = frame.w
+	var desk_d: float = frame.d
+	var desk_cz: float = frame.cz
+	# 俯角越浅，同一屏幕矩形反投影出的世界尺度越大——桌沿/装饰尺寸必须跟着放大，
+	# 否则 45° 下 0.34m 的桌沿薄得像纸（原版桌沿厚度约占画面高 5%）。
+	var sc := clampf(desk_d / 5.5, 1.0, 3.0)
+	var thick: float = DESK_THICK * sc
 	var top := MeshInstance3D.new()
 	var box := BoxMesh.new()
 	box.size = Vector3(desk_w, thick, desk_d)
@@ -250,32 +239,41 @@ func _build_scene() -> void:
 	top.position = Vector3(0.0, -thick / 2.0, desk_cz)
 	add_child(top)
 
+	# 深色木台面：略微内缩，让外圈胡桃木桌沿和黄铜细线露出来。
+	var felt := MeshInstance3D.new()
+	var felt_box := BoxMesh.new()
+	felt_box.size = Vector3(desk_w - 0.42 * sc, 0.035 * sc, desk_d - 0.42 * sc)
+	felt.mesh = felt_box
+	felt.material_override = _felt_mat(desk_w / 1.2, desk_d / 1.2)
+	felt.position = Vector3(0.0, 0.012 * sc, desk_cz)
+	add_child(felt)
+
 	# 深色木质桌沿/扶手，围住整张赌桌。
 	var rim := MeshInstance3D.new()
 	var rim_box := BoxMesh.new()
-	rim_box.size = Vector3(desk_w + 0.24, thick * 0.9, desk_d + 0.24)
+	rim_box.size = Vector3(desk_w + 0.28 * sc, thick * 0.85, desk_d + 0.28 * sc)
 	rim.mesh = rim_box
 	rim.material_override = _wood_mat(desk_w / 1.2, desk_d / 1.2, 0.38)
 	rim.position = top.position + Vector3(0.0, -thick * 0.55, 0.0)
 	add_child(rim)
 	var rail_mat := _wood_mat(desk_w / 1.2, desk_d / 1.2, 0.34)
 	var gold := _gold_mat()
-	var rail_y := 0.075
-	var rail_z := desk_d / 2.0 - 0.05
-	var rail_x := desk_w / 2.0 - 0.05
-	_add_box(Vector3(0.0, rail_y, desk_cz - rail_z), Vector3(desk_w + 0.06, 0.11, 0.20), rail_mat)
-	_add_box(Vector3(0.0, rail_y, desk_cz + rail_z), Vector3(desk_w + 0.06, 0.11, 0.20), rail_mat)
-	_add_box(Vector3(-rail_x, rail_y, desk_cz), Vector3(0.20, 0.11, desk_d - 0.20), rail_mat)
-	_add_box(Vector3(rail_x, rail_y, desk_cz), Vector3(0.20, 0.11, desk_d - 0.20), rail_mat)
-	_add_box(Vector3(0.0, rail_y + 0.058, desk_cz - rail_z + 0.11), Vector3(desk_w - 0.10, 0.010, 0.014), gold)
-	_add_box(Vector3(0.0, rail_y + 0.058, desk_cz + rail_z - 0.11), Vector3(desk_w - 0.10, 0.010, 0.014), gold)
-	_add_box(Vector3(-rail_x + 0.11, rail_y + 0.058, desk_cz), Vector3(0.014, 0.010, desk_d - 0.30), gold)
-	_add_box(Vector3(rail_x - 0.11, rail_y + 0.058, desk_cz), Vector3(0.014, 0.010, desk_d - 0.30), gold)
+	var rail_y := 0.09 * sc
+	var rail_z := desk_d / 2.0 - 0.06 * sc
+	var rail_x := desk_w / 2.0 - 0.06 * sc
+	_add_box(Vector3(0.0, rail_y, desk_cz - rail_z), Vector3(desk_w + 0.08 * sc, 0.14 * sc, 0.30 * sc), rail_mat)
+	_add_box(Vector3(0.0, rail_y, desk_cz + rail_z), Vector3(desk_w + 0.08 * sc, 0.14 * sc, 0.30 * sc), rail_mat)
+	_add_box(Vector3(-rail_x, rail_y, desk_cz), Vector3(0.30 * sc, 0.14 * sc, desk_d - 0.28 * sc), rail_mat)
+	_add_box(Vector3(rail_x, rail_y, desk_cz), Vector3(0.30 * sc, 0.14 * sc, desk_d - 0.28 * sc), rail_mat)
+	_add_box(Vector3(0.0, rail_y + 0.073 * sc, desk_cz - rail_z + 0.16 * sc), Vector3(desk_w - 0.12 * sc, 0.012 * sc, 0.018 * sc), gold)
+	_add_box(Vector3(0.0, rail_y + 0.073 * sc, desk_cz + rail_z - 0.16 * sc), Vector3(desk_w - 0.12 * sc, 0.012 * sc, 0.018 * sc), gold)
+	_add_box(Vector3(-rail_x + 0.16 * sc, rail_y + 0.073 * sc, desk_cz), Vector3(0.018 * sc, 0.012 * sc, desk_d - 0.40 * sc), gold)
+	_add_box(Vector3(rail_x - 0.16 * sc, rail_y + 0.073 * sc, desk_cz), Vector3(0.018 * sc, 0.012 * sc, desk_d - 0.40 * sc), gold)
 
-	_decorate(pen_frame) # 账单纸、筹码堆和扑克牌：锚定猪活动区（桌子本体已延伸出画面，不能拿桌沿当锚点）
+	_decorate(inner, sc) # 桌边账单纸、散落零钱和马克杯，锚定猪活动区
 
-	# 桌腿：坐姿视角能看到桌沿以下，得有腿撑着
-	var leg_h := -FLOOR_Y - thick
+	# 桌腿：45° 俯视时桌沿和桌腿都会进画面，得有腿撑着
+	var leg_h := -FLOOR_Y - thick + 0.1
 	var leg_mat := _wood_mat(1.5, 1.5, 0.7)
 	leg_mat.albedo_color = Color("#7a5a3a")
 	for i in range(4):
@@ -283,29 +281,28 @@ func _build_scene() -> void:
 		var sz := -1.0 if i < 2 else 1.0
 		var leg := MeshInstance3D.new()
 		var lm := CylinderMesh.new()
-		lm.top_radius = 0.14
-		lm.bottom_radius = 0.11
+		lm.top_radius = 0.18 * sc
+		lm.bottom_radius = 0.15 * sc
 		lm.height = leg_h
 		lm.radial_segments = 12
 		leg.mesh = lm
 		leg.material_override = leg_mat
 		leg.position = Vector3(
-			sx * (desk_w / 2.0 - 0.45),
+			sx * (desk_w / 2.0 - 0.5 * sc),
 			FLOOR_Y + leg_h / 2.0,
-			desk_cz + sz * (desk_d / 2.0 - 0.40)
+			desk_cz + sz * (desk_d / 2.0 - 0.45 * sc)
 		)
 		add_child(leg)
 
 
-## 给定屏幕矩形反投影到桌面平面（透视下屏幕↔世界非线性，见 _screen_to_desk）。
-## 现在只用于取猪活动区的世界中心（cz），桌子本体已改为固定尺寸。
+## 桌板大小按给定的屏幕矩形反投影（透视下屏幕↔世界非线性，见 _screen_to_desk）。
 func _desk_frame(area: Rect2) -> Dictionary:
 	var tl := _screen_to_desk(area.position)
 	var bl := _screen_to_desk(area.position + Vector2(0.0, area.size.y))
-	var half_w: float = maxf(absf(tl.x), absf(bl.x))
+	var half_w := maxf(absf(tl.x), absf(bl.x)) + DESK_MARGIN
 	return {
 		"w": half_w * 2.0,
-		"d": absf(bl.z - tl.z),
+		"d": absf(bl.z - tl.z) + DESK_MARGIN * 2.0,
 		"cz": (tl.z + bl.z) / 2.0,
 	}
 
