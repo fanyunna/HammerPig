@@ -5,11 +5,11 @@ extends SceneTree
 
 var game
 
-# [pitch_deg, fov, dist, area_inset_x, area_inset_top, area_inset_bottom, tag]
+# [fov, height, back, tag] —— 坐姿相机：高度（桌面上方）+ 桌前距离
 const VARIANTS := [
-	[36.0, 50.0, 14.0, 70.0, 190.0, 70.0, "a"],
-	[32.0, 55.0, 16.0, 80.0, 210.0, 80.0, "b"],
-	[40.0, 45.0, 12.0, 60.0, 170.0, 60.0, "c"],
+	[34.0, 2.6, 7.8, "a"],
+	[30.0, 2.2, 7.0, "b"],
+	[38.0, 3.0, 8.6, "c"],
 ]
 
 
@@ -26,13 +26,12 @@ func snap(file: String) -> void:
 	print("SAVED ", file)
 
 
-func rebuild_desk(pitch: float, fov: float, dist: float, ix: float, it: float, ib: float) -> void:
+func rebuild_desk(fov: float, h: float, back: float) -> void:
 	if game.desk3d != null:
 		game.desk3d.queue_free()
-	Desk3D.pitch_override = deg_to_rad(pitch)
 	Desk3D.fov_override = fov
-	Desk3D.dist_override = dist
-	Desk3D.area_override = Rect2(ix, it, Desk3D.VIEW_W - ix * 2.0, Desk3D.VIEW_H - it - ib)
+	Desk3D.height_override = h
+	Desk3D.back_override = back
 	var desk := Desk3D.new()
 	game.add_child(desk)
 	desk.build(game.DESK_RECT, game.PIG_BOUNDS)
@@ -54,8 +53,9 @@ func run() -> void:
 	game.next_card = 370
 	Input.warp_mouse(game.pigs[3].position)
 	for v in VARIANTS:
-		rebuild_desk(v[0], v[1], v[2], v[3], v[4], v[5])
+		rebuild_desk(v[0], v[1], v[2])
+		var pitch := atan((v[1] + 0.15) / v[2]) # 相机实际俯角（由高度/距离推出）
 		for vp in game.pig3d: # 猪同步到桌面俯角（浅 3° 保持一点立体）
-			vp.set_cam_pitch(deg_to_rad(v[0] - 3.0))
-		await snap("tmp_desk_v%s.png" % v[6])
+			vp.set_cam_pitch(pitch - deg_to_rad(3.0))
+		await snap("tmp_desk_v%s.png" % v[3])
 	quit()
