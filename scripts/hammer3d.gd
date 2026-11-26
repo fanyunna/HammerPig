@@ -119,44 +119,26 @@ func _build_obj_hammer() -> void:
 
 
 func _build_human_hand(parent: Node3D) -> void:
-	# 一体式手背轮廓：腕部、掌心、四指和外展拇指连成同一个挤出网格，避免木偶式拼接。
-	var hand := CSGPolygon3D.new()
-	hand.mode = CSGPolygon3D.MODE_DEPTH
-	hand.depth = 0.20
-	hand.smooth_faces = true
-	hand.polygon = PackedVector2Array([
-		Vector2(-0.22, 1.23), Vector2(-0.27, 1.08), Vector2(-0.34, 0.94),
-		Vector2(-0.35, 0.73), Vector2(-0.33, 0.58),
-		# 小指：短而略向内弯
-		Vector2(-0.31, 0.39), Vector2(-0.29, 0.31), Vector2(-0.25, 0.28), Vector2(-0.21, 0.31), Vector2(-0.19, 0.43),
-		# 无名指
-		Vector2(-0.16, 0.30), Vector2(-0.12, 0.26), Vector2(-0.08, 0.28), Vector2(-0.07, 0.43),
-		# 中指
-		Vector2(-0.035, 0.27), Vector2(0.01, 0.24), Vector2(0.055, 0.27), Vector2(0.06, 0.44),
-		# 食指
-		Vector2(0.10, 0.30), Vector2(0.15, 0.28), Vector2(0.19, 0.32), Vector2(0.18, 0.49),
-		Vector2(0.25, 0.55), Vector2(0.30, 0.51),
-		# 拇指根部向外展开，再回扣到握柄上
-		Vector2(0.39, 0.59), Vector2(0.43, 0.68), Vector2(0.40, 0.77),
-		Vector2(0.34, 0.82), Vector2(0.28, 0.76), Vector2(0.24, 0.68),
-		Vector2(0.28, 0.94), Vector2(0.27, 1.09), Vector2(0.23, 1.23)
-	])
-	hand.position = Vector3(0.0, 0.0, 0.14)
-	hand.material = _material(Color("#eda57f"), 0.75) # 粉色皮肤拳头（原版卡通手）
-	parent.add_child(hand)
-	# 掌骨与指节的柔和体积：薄椭球贴在一体轮廓上，表现掌丘、四个掌指关节和拇指球。
-	var knuckle_mat := _material(Color("#e2946e"), 0.8) # 指节：略深一档的皮肤
-	var palm_mat := _material(Color("#d98a68"), 0.85) # 掌心：最暗
-	_mesh(parent, _capsule(0.18, 0.32), palm_mat, Vector3(-0.16, 0.76, 0.245), Vector3(1.0, 1.0, 0.34))
-	_mesh(parent, _capsule(0.18, 0.34), knuckle_mat, Vector3(0.17, 0.78, 0.245), Vector3(1.0, 1.0, 0.34))
+	## 攥柄拳头（俯视可读）：手背整块罩住锤柄，四条指脊横跨柄身，拇指斜扣，
+	## 肤色手腕 + 黑护腕，小臂出画。局部约定：柄轴 = Y（+Y 朝玩家），镜头在 -Z 一侧。
+	var skin := _material(Color("#eda57f"), 0.75)
+	var wristband := _material(Color("#26262c"), 0.7)
+	# 手背：略压扁的椭球，朝镜头一侧隆起成拳背
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.5
+	sphere.height = 1.0
+	sphere.radial_segments = 24
+	sphere.rings = 12
+	_mesh(parent, sphere, skin, Vector3(0.02, 0.55, -0.06), Vector3(0.75, 0.55, 0.40))
+	# 四指：沿 X 横跨锤柄的指脊，rotation.y 让 +X 端探向镜头、-X 端沉到柄后，呈包裹感
+	var finger := _capsule(0.062, 0.14)
 	for i in range(4):
-		var x := -0.235 + float(i) * 0.145
-		_mesh(parent, _capsule(0.052, 0.105), knuckle_mat, Vector3(x, 0.50, 0.265), Vector3(1.0, 1.0, 0.52))
-	# 指尖高光按四指自然排布，朝锤头的一端可见。
-	var nail_mat := _material(Color("#f6b892"), 0.7)
-	for i in range(4):
-		var x := -0.245 + float(i) * 0.145
-		_mesh(parent, _capsule(0.022, 0.060), nail_mat, Vector3(x, 0.32, 0.266), Vector3(1.0, 1.0, 0.34))
-	_mesh(parent, _capsule(0.045, 0.12), nail_mat, Vector3(0.35, 0.64, 0.267), Vector3(1.0, 1.0, 0.34))
-	# 黑色护腕：腕口一圈短圆柱（原版特征，粉色拳头配黑腕带）
-	_mesh(parent, _cylinder(0.30, 0.15), _material(Color("#26262c"), 0.7), Vector3(0.0, 1.29, 0.24))
+		var row := _mesh(parent, finger, skin, Vector3(-0.02, 0.40 + float(i) * 0.11, -0.24), Vector3(1.7, 1.0, 1.0))
+		row.rotation.y = 0.6
+	# 拇指：更粗的斜脊，扣在四指下方
+	var thumb := _mesh(parent, _capsule(0.085, 0.16), skin, Vector3(-0.04, 0.34, -0.26), Vector3(1.6, 1.0, 1.0))
+	thumb.rotation = Vector3(0.0, 0.45, 0.30)
+	# 手腕、黑护腕、出画的小臂
+	_mesh(parent, _cylinder(0.155, 0.24), skin, Vector3(0.02, 0.90, -0.06))
+	_mesh(parent, _cylinder(0.19, 0.15), wristband, Vector3(0.02, 0.985, -0.06))
+	_mesh(parent, _cylinder(0.165, 0.40), skin, Vector3(0.02, 1.15, -0.06))
