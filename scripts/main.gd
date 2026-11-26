@@ -3655,23 +3655,7 @@ func draw_hammer() -> void:
 	if SHOW_HAND:
 		# 握点取柄的下段（不是末端）：柄尾要露在拳头外面，"握着"才看得懂
 		draw_shadow_arm(pivot + Vector2(19, 74).rotated(angle))
-	if hammer_tex != null: # 贴图锤：皮手套握木柄锤，跟随鼠标，挥锤下压+旋转沿用 swing 动画
-		var hs := hammer_tex.get_size()
-		var hfit := 250.0 / maxf(hs.x, hs.y) # 最长边约 250：比原 3D 锤略大，握锤的手也进了画面
-		# 贴图里锤头在左上（约 90,78）、手套在右下——命中点必须对准锤头，不是贴图中心。
-		# 旋转支点放在手套握柄处：挥锤是绕着手腕转，锤头扫出弧线，而不是钉在原地打转。
-		var head_px := Vector2(90, 78)
-		var grip_px := Vector2(195, 235)
-		var sc := k * hfit
-		var tp := hammer_position + (grip_px - head_px) * sc + Vector2(-8, 24) * punch
-		if over:
-			tp += Vector2(58, 46)
-		draw_set_transform(tp, angle, Vector2(sc, sc))
-		draw_texture(hammer_tex, -grip_px)
-		draw_set_transform(Vector2.ZERO)
-		_draw_aim_reticle()
-		return
-	if hammer3d != null:
+	if hammer3d != null: # 3D 锤：独立透明视口的立体锤光标（贴图锤已退役，hammer_tex 只留给序幕封面）
 		draw_set_transform(pivot, angle, Vector2(k, k))
 		draw_texture_rect(hammer3d.get_texture(), Rect2(-104, -104, 208, 208), false)
 		draw_set_transform(Vector2.ZERO)
