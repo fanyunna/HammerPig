@@ -78,7 +78,7 @@
 
   "pig_types": [
     { "id": "piggy", "label": "牛仔猪", "weight": 50, "hp": 2, "value": 14, "speed": 1.0,  "scale": 1.0, "bandana": true,
-      "color": "#f7c2bf", "accent": "#e79aa0", "eye": "#2f2a29", "blush": "#f2a0a4", "rough": 0.62 },
+      "color": "#f7c2bf", "accent": "#e79aa0", "eye": "#2f2a29", "blush": "#f2a0a4", "rough": 0.8 },
     { "id": "stripe", "label": "花猪", "weight": 16, "hp": 2, "value": 17, "speed": 1.05, "scale": 1.05, "striped": true,
       "color": "#efeade", "stripe": "#4f7d8c", "accent": "#7e9aa4", "eye": "#2b3a40", "blush": "#d9c9b4", "rough": 0.5 },
     { "id": "mini",  "label": "小牛仔", "weight": 15, "hp": 1, "value": 9,  "speed": 1.85, "scale": 0.70, "hat": true,
