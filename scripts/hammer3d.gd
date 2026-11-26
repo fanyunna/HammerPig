@@ -74,35 +74,27 @@ func _build() -> void:
 		_build_obj_hammer()
 		return
 	var hammer := Node3D.new()
-	# 锤子平放在桌面平面：从上往下看时，锤头在前、锤柄朝玩家方向延伸。
+	# 锤子平放在桌面平面：从上往下看时，锤头在远端、锤柄朝玩家方向延伸。
 	hammer.rotation.x = PI / 2.0
 	hammer.rotation.z = -0.48
 	add_child(hammer)
-	var wood := _material(Color("#7a4a26"), 0.5) # 手柄原木
-	var wood_light := _material(Color("#9c6b3f"), 0.55) # 木桶板：敲猪的家伙到了西部就得是酒桶
-	var wood_dark := _material(Color("#6e4522"), 0.6) # 桶的端面，深一档
-	var iron := _material(Color("#3a3f45"), 0.42, 0.7) # 铁箍：深灰哑光
-	var leather := _material(Color("#4a2e18"), 0.85) # 握把缠的皮绳
-	# 木柄：中段略细，两端有圆弧过渡，握持区缠深色皮绳。
-	_mesh(hammer, _cylinder(0.105, 1.35), wood, Vector3(0, 0.10, 0))
-	_mesh(hammer, _cylinder(0.115, 0.43), wood_light, Vector3(0, 0.22, 0))
-	_mesh(hammer, _cylinder(0.13, 0.28), leather, Vector3(0, 0.67, 0))
-	_mesh(hammer, _cylinder(0.14, 0.12), iron, Vector3(0, 0.82, 0))
-	# 木桶锤头：一段横放的酒桶 —— 圆柱桶身 + 两个深色端面 + 两道铁箍。
-	var barrel := _mesh(hammer, _cylinder(0.30, 1.05), wood_light, Vector3(0, -0.62, 0))
-	barrel.rotation.z = PI / 2.0 # 桶轴转到左右方向
+	# 对齐原版 Bills Must Be Paid：深藏青低多边形羊角锤 + 红橙短柄 + 粉色拳头黑护腕。
+	var navy := _material(Color("#2e3a58"), 0.55) # 锤头藏青：哑光低多边形
+	var navy_light := _material(Color("#3b4a72"), 0.5) # 打击面端亮一档，区分方向
+	var handle_red := _material(Color("#c4573b"), 0.6) # 红橙短柄
+	# 柄：短而直，上段被拳头握住
+	_mesh(hammer, _cylinder(0.11, 1.15), handle_red, Vector3(0, 0.32, 0))
+	_mesh(hammer, _cylinder(0.125, 0.14), handle_red, Vector3(0, -0.22, 0)) # 柄头防脱的加粗节
+	# 锤头：打击面（六棱柱，低多边形棱角）→ 楔形头身 → V 形羊角，头轴垂直于柄。
+	var face := _mesh(hammer, _cylinder(0.27, 0.34, 6), navy_light, Vector3(-0.55, -0.30, 0))
+	face.rotation.z = PI / 2.0
+	_mesh(hammer, _cylinder(0.17, 0.14, 6), navy, Vector3(-0.32, -0.30, 0)) # 面与头身之间的收颈
+	var cheek := _mesh(hammer, BoxMesh.new(), navy, Vector3(0.02, -0.30, 0))
+	cheek.mesh.size = Vector3(0.80, 0.30, 0.24) # 头身：从打击面向羊角渐宽的楔块
 	for side in [-1.0, 1.0]:
-		var cap := _mesh(hammer, _cylinder(0.29, 0.04), wood_dark, Vector3(0.53 * side, -0.62, 0))
-		cap.rotation.z = PI / 2.0
-		var hoop_mesh := TorusMesh.new()
-		hoop_mesh.inner_radius = 0.285
-		hoop_mesh.outer_radius = 0.325
-		hoop_mesh.rings = 10
-		hoop_mesh.ring_segments = 28
-		var hoop := _mesh(hammer, hoop_mesh, iron, Vector3(0.33 * side, -0.62, 0))
-		hoop.rotation.y = PI / 2.0 # 箍的环面垂直于桶轴
-	# 桶身与手柄之间的铁压圈，让锤头和木柄看起来确实锁在一起。
-	_mesh(hammer, _cylinder(0.17, 0.1), iron, Vector3(0, -0.38, 0))
+		var claw := _mesh(hammer, BoxMesh.new(), navy, Vector3(0.36, -0.30 + side * 0.14, 0))
+		claw.mesh.size = Vector3(0.50, 0.14, 0.18) # 两根羊角张开成 V，劈口朝远端
+		claw.rotation.z = side * 0.45
 	_build_human_hand(hammer)
 
 
@@ -150,19 +142,21 @@ func _build_human_hand(parent: Node3D) -> void:
 		Vector2(0.28, 0.94), Vector2(0.27, 1.09), Vector2(0.23, 1.23)
 	])
 	hand.position = Vector3(0.0, 0.0, 0.14)
-	hand.material = _material(Color("#7a4a26"), 0.88) # 西部皮手套：粗糙皮革，不是光皮肤
+	hand.material = _material(Color("#eda57f"), 0.75) # 粉色皮肤拳头（原版卡通手）
 	parent.add_child(hand)
 	# 掌骨与指节的柔和体积：薄椭球贴在一体轮廓上，表现掌丘、四个掌指关节和拇指球。
-	var knuckle_mat := _material(Color("#86562c"), 0.9) # 指节：磨亮一点的皮
-	var palm_mat := _material(Color("#673d1e"), 0.92) # 掌心：最常磨，最暗最糙
+	var knuckle_mat := _material(Color("#e2946e"), 0.8) # 指节：略深一档的皮肤
+	var palm_mat := _material(Color("#d98a68"), 0.85) # 掌心：最暗
 	_mesh(parent, _capsule(0.18, 0.32), palm_mat, Vector3(-0.16, 0.76, 0.245), Vector3(1.0, 1.0, 0.34))
 	_mesh(parent, _capsule(0.18, 0.34), knuckle_mat, Vector3(0.17, 0.78, 0.245), Vector3(1.0, 1.0, 0.34))
 	for i in range(4):
 		var x := -0.235 + float(i) * 0.145
 		_mesh(parent, _capsule(0.052, 0.105), knuckle_mat, Vector3(x, 0.50, 0.265), Vector3(1.0, 1.0, 0.52))
-	# 皮手套指尖的磨损亮面按四指自然排布，朝锤头的一端可见。
-	var nail_mat := _material(Color("#a9743f"), 0.85)
+	# 指尖高光按四指自然排布，朝锤头的一端可见。
+	var nail_mat := _material(Color("#f6b892"), 0.7)
 	for i in range(4):
 		var x := -0.245 + float(i) * 0.145
 		_mesh(parent, _capsule(0.022, 0.060), nail_mat, Vector3(x, 0.32, 0.266), Vector3(1.0, 1.0, 0.34))
 	_mesh(parent, _capsule(0.045, 0.12), nail_mat, Vector3(0.35, 0.64, 0.267), Vector3(1.0, 1.0, 0.34))
+	# 黑色护腕：腕口一圈短圆柱（原版特征，粉色拳头配黑腕带）
+	_mesh(parent, _cylinder(0.30, 0.15), _material(Color("#26262c"), 0.7), Vector3(0.0, 1.29, 0.24))

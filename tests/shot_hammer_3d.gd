@@ -20,8 +20,13 @@ func run() -> void:
 	var game = load("res://scenes/main.tscn").instantiate()
 	root.add_child(game)
 	await process_frame
+	await process_frame
 	game.intro_open = false
-	Input.warp_mouse(Vector2(860, 520)) # 桌面中间，锤子完整可见且不悬停 UI
+	await process_frame
+	await process_frame
+	# 窗口无焦点时 warp_mouse 不可靠：冻结游戏逻辑，直接钉住锤子位置（桌面中间）
+	game.set_process(false)
+	game.hammer_position = Vector2(620, 440)
 	for v in [[false, "barrel"], [true, "obj"]]:
 		Hammer3D.use_obj = v[0]
 		if game.hammer3d != null:
@@ -30,6 +35,8 @@ func run() -> void:
 		var h := Hammer3D.new()
 		game.add_child(h)
 		game.hammer3d = h
+		game.queue_redraw()
+		await process_frame
 		await process_frame
 		await process_frame
 		await snap("tmp_hammer_%s.png" % v[1])
