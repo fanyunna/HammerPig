@@ -212,7 +212,8 @@ var stamina_flash := 0.0
 var end_reason := "" # "target" / "exhausted"
 var font := SystemFont.new()
 
-var pig_tex: Dictionary = {} # 猪贴图：id → Texture2D（缺的键 = 素材还没生成，静默回退原路径）
+var pig_tex: Dictionary = {} # 猪贴图：id → Texture2D。桌面猪已全部改走 3D 实时渲染，
+# 贴图只保留给序幕封面等 UI 用（draw_cover_texture(pig_tex["piggy"])）
 var hammer_tex: Texture2D = null # 握锤的手贴图；null = 用回 3D 锤
 var bg_tex: Texture2D = null # 西部酒馆背景；null = 用回纯色底
 var pig3d: Array[Pig3D] = [] # 每只猪一个 SubViewport（3D）
@@ -1808,14 +1809,7 @@ func _gold_squash_scale(pig: Dictionary) -> Vector2:
 func pig_visual_center(pig: Dictionary) -> Vector2:
 	var center: Vector2 = pig.position
 	var k := pig_scale(pig.type) * pig_size() / PIG3D_SIZE
-	if pig_tex.has(String(pig.type.get("id", "piggy"))):
-		center += PIG3D_OFFSET
-		var bounce := absf(sin(float(pig.get("hop_phase", 0.0))))
-		var speed: float = pig.velocity.length()
-		center.y -= bounce * lerpf(14.0, 20.0, clampf(speed / 160.0, 0.0, 1.0)) * k
-		if pig.flash > 0.0:
-			center.x += sin(pig.flash * 90) * 8 * k
-	elif use_3d:
+	if use_3d:
 		center += PIG3D_OFFSET
 	if pig.hop > 0.0:
 		center.y -= sin(pig.hop / 0.24 * PI) * 26 * k
@@ -3467,11 +3461,8 @@ func _draw() -> void:
 func draw_pig(pig: Dictionary, index: int) -> void:
 	if bool(pig.get("wheel_gold", false)):
 		_draw_gold_aura(pig) # 金猪的自发光光晕画在身后，和普通猪一眼区分
-	var t: Dictionary = pig.get("type", {})
-	var tex: Texture2D = pig_tex.get(String(t.get("id", "piggy")))
-	if tex != null: # 有贴图走贴图：AI 素材替掉图元 3D 模型
-		draw_pig_sprite(pig, tex)
-		return
+	# 全部猪走 3D 实时渲染（不再按 pig_tex 优先走贴图）：材质改动即时生效，
+	# 猪种体型缩放由 apply_type 里的 _root3d.scale 负责，与贴图路线观感一致。
 	if use_3d and index < pig3d.size():
 		var s := pig_size() / 190.0 # 阴影 / 裂纹 / 抖动幅度都按绘制尺寸等比缩放
 		var pos: Vector2 = pig.position + PIG3D_OFFSET
@@ -3502,50 +3493,6 @@ func draw_pig(pig: Dictionary, index: int) -> void:
 			draw_set_transform(Vector2.ZERO)
 		return
 	draw_pig_flat(pig)
-
-
-## 贴图猪（AI 西部素材）：移动时按 hop_phase 正弦弹跳 —— 视觉上移 = -abs(sin) × 跳高，
-## 落地瞬间（sin 过零点附近）短暂挤压（0.9 / 1.08），空中轻微拉伸（1.05）；
-## 被敲中的大跳（hop > 0）、受击抖动、死亡淡出都沿用原参数。
-func draw_pig_sprite(pig: Dictionary, tex: Texture2D) -> void:
-	var t: Dictionary = pig.get("type", {})
-	var side := pig_size() * pig_scale(t) # 贴图最长边的绘制长度：跟整体尺寸与猪种体型走
-	var k := side / PIG3D_SIZE # 阴影 / 裂纹 / 抖动幅度按绘制尺寸等比缩放（沿用原 3D 路径）
-	var pos: Vector2 = pig.position + PIG3D_OFFSET
-	if pig.flash > 0.0:
-		pos.x += sin(pig.flash * 90) * 8 * k
-	var squash := Vector2.ONE
-	if pig.hp > 0:
-		var spd: float = pig.velocity.length()
-		var bounce := absf(sin(float(pig.get("hop_phase", 0.0))))
-		var hop_h := lerpf(14.0, 20.0, clampf(spd / 160.0, 0.0, 1.0)) # 快猪跳高一点
-		pos.y -= bounce * hop_h * k
-		if bounce < 0.25: # 落地瞬间：短暂挤压
-			squash = Vector2(1.08, 0.9)
-		else: # 空中：轻微拉伸
-			squash = Vector2(1.0, 1.0 + 0.05 * bounce)
-	if pig.hop > 0.0:
-		pos.y -= sin(pig.hop / 0.24 * PI) * 26 * k # 受击向上跳起（大跳，沿用原参数）
-	draw_set_transform(pig.position + Vector2(0, 43 * k), 0, Vector2(1, 0.25))
-	draw_circle(Vector2.ZERO, 62 * k, Color(0.12, 0.1, 0.08, 0.27)) # 桌面投影：画在脚下，不跟着跳
-	draw_set_transform(Vector2.ZERO)
-	var ts := tex.get_size()
-	var fit := side / maxf(ts.x, ts.y) # 最长边对齐 side，等比缩放，不拉坏素材比例
-	var flip := 1.0 if bool(pig.get("left", true)) else -1.0 # 素材朝左画；往右走时镜像
-	if pig.flash > 0.0:
-		var compression := sin(clampf(float(pig.flash) / 0.14, 0.0, 1.0) * PI)
-		squash *= Vector2(1.0 + 0.22 * compression, 1.0 - 0.25 * compression)
-	pos.y += (1.0 - squash.y) * side * 0.5 # 以脚为轴挤压：中心下移，脚底保持贴地
-	draw_set_transform(pos, 0.0, Vector2(flip * squash.x * fit, squash.y * fit))
-	draw_texture(tex, -ts / 2.0)
-	draw_set_transform(Vector2.ZERO)
-	var dmg: int = int(pig.get("max_hp", 2)) - int(pig.hp) # 挨了几锤就画几道裂：金猪能裂两道
-	if dmg >= 1:
-		draw_set_transform(pos, 0.0, Vector2(flip * k, k))
-		draw_polyline(PackedVector2Array([Vector2(-26, -22), Vector2(-13, -9), Vector2(-23, 5), Vector2(-7, 23)]), Color("#985f69"), 3, true)
-		if dmg >= 2:
-			draw_polyline(PackedVector2Array([Vector2(20, -30), Vector2(8, -14), Vector2(22, -2), Vector2(11, 22)]), Color("#985f69"), 3, true)
-		draw_set_transform(Vector2.ZERO)
 
 
 ## 2D 回退版（headless / pig_3d: false）：形状照旧，但颜色与大小跟着种类走
