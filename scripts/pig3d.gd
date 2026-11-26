@@ -171,21 +171,21 @@ func _wood_pig_texture() -> ImageTexture:
 	n_grain.frequency = 0.35
 	var n_paint := FastNoiseLite.new()
 	n_paint.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	n_paint.frequency = 0.085
+	n_paint.frequency = 0.028 # 低频：掉漆只集中在少数几大块，不是满身斑点
 	var n_edge := FastNoiseLite.new()
 	n_edge.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	n_edge.frequency = 0.6
+	n_edge.frequency = 0.55
 	for y in range(size):
 		for x in range(size):
 			var warp := n.get_noise_2d(float(x) * 0.6, float(y) * 0.3) * 2.2
 			var rings := pow(sin(float(y) * 0.16 + warp) * 0.5 + 0.5, 1.6)
 			var grain := n_grain.get_noise_2d(float(x), float(y) * 6.0) * 0.5 + 0.5
 			var c := wood_dark.lerp(wood_light, clampf(rings * 0.75 + grain * 0.5, 0.0, 1.0))
-			# 粉漆大片剥落：mask 高处漆还盖着，低处露出木纹，边缘撕扯不齐
-			# （漆面略过半：粉漆为主、剥露的木纹是点缀，才是"掉漆的旧木玩具"）
-			var pm := n_paint.get_noise_2d(float(x), float(y)) + n_edge.get_noise_2d(float(x), float(y)) * 0.28
-			if pm > 0.22:
-				c = c.lerp(paint, clampf((pm - 0.22) * 4.0, 0.0, 1.0))
+			# 哑光粉漆整片盖住（约七成面积），磨损掉漆集中在边界清晰的几个小块：
+			# mask 低洼处掉漆露原木，陡过渡让漆面是"一整片漆"而不是满身斑点（斑点像黏土）。
+			var pm := n_paint.get_noise_2d(float(x), float(y)) + n_edge.get_noise_2d(float(x), float(y)) * 0.18
+			var paint_cover := clampf((pm + 0.30) * 5.5, 0.0, 1.0)
+			c = c.lerp(paint, paint_cover)
 			img.set_pixel(x, y, c)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 20
@@ -236,25 +236,9 @@ func _wooden(color: Color, rough := 0.78, tex := true) -> StandardMaterial3D:
 		m.albedo_texture = _wood_pig_texture()
 		m.normal_enabled = true
 		m.normal_texture = _grain_texture()
-		m.normal_scale = 0.5 # 雕刻痕与凹痕的细小起伏
+		m.normal_scale = 0.3 # 磨损痕的轻微起伏：哑光但不粗糙颗粒（用户负面项：粗糙颗粒感）
 	m.uv1_scale = Vector3.ONE
 	return m
-
-
-## 给球体图元雕出轻微不规则：顶点沿径向噪声偏移（手刻的歪歪扭扭感），
-## 径向偏移不破坏原法线方向，幅度小到光照不会穿帮。
-func _carved_sphere_arrays(src: SphereMesh, amp: float) -> Array:
-	var arrays := src.get_mesh_arrays()
-	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-	var n := FastNoiseLite.new()
-	n.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	n.frequency = 0.9
-	n.seed = 11
-	for i in range(verts.size()):
-		var v := verts[i]
-		verts[i] = v + v.normalized() * (n.get_noise_3d(v.x * 2.0, v.y * 2.0, v.z * 2.0) * amp)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	return arrays
 
 
 ## 罐子里攒的钱：一堆歪歪斜斜塞进去的硬币。只有玻璃罐会把它显示出来 —— 一眼看得见里面有货，
@@ -301,16 +285,15 @@ func _build_bank(parent: Node3D) -> void:
 	var gold_mat := _ceramic(Color("#e0b552"), 0.4, false) # 金币：哑光黄铜（不动）
 	_inner = _build_inner_coins(parent) # 只有玻璃罐才把它打开
 
-	# 罐体：更矮更宽的圆润存钱罐轮廓，顶点噪声偏移做出手刻的不规则感
+	# 罐体：按参考图做成更矮、更宽的圆润存钱罐轮廓
+	# （用户明确要求：外形轮廓/体型一个顶点都不能动，只换材质）
 	var body_mesh := SphereMesh.new()
 	body_mesh.radius = 1.0
-	body_mesh.height = 1.78
-	body_mesh.radial_segments = 48
-	body_mesh.rings = 28
-	var body_arr := ArrayMesh.new()
-	body_arr.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _carved_sphere_arrays(body_mesh, 0.05))
+	body_mesh.height = 1.72
+	body_mesh.radial_segments = 32
+	body_mesh.rings = 20
 	_body_base_scale = Vector3(1.19, 0.90, 1.04)
-	_body = _part(parent, body_arr, _body_mat, Vector3(0.0, 0.03, 0.0), _body_base_scale)
+	_body = _part(parent, body_mesh, _body_mat, Vector3(0.0, 0.03, 0.0), _body_base_scale)
 
 	# 顶部投币口：细长凹槽（存钱罐的标志）
 	var slot_mesh := BoxMesh.new()
@@ -329,7 +312,7 @@ func _build_bank(parent: Node3D) -> void:
 	# 猪鼻：宽圆木鼻盘，朝向镜头；两枚深色鼻孔用木珠点表现
 	var snout_mesh := SphereMesh.new()
 	snout_mesh.radius = 0.34
-	snout_mesh.height = 0.42
+	snout_mesh.height = 0.40
 	snout_mesh.radial_segments = 24
 	var snout := _part(parent, snout_mesh, _accent_mat, Vector3(0.0, -0.10, 1.00), Vector3(1.0, 0.82, 0.52))
 	# 鼻盘外沿加一圈浅浮雕，缩小到游戏尺寸后仍能和脸部分开
