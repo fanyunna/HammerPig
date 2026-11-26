@@ -160,18 +160,18 @@ func _wood_pig_texture() -> ImageTexture:
 		return _pig_wood_tex
 	var size := 256
 	var img := Image.create(size, size, false, Image.FORMAT_RGB8)
-	var wood_dark := Color("#d3b385")
-	var wood_light := Color("#e8d3a9")
-	var paint := Color(0.99, 0.96, 0.94) # 漆底：近白，乘上猪本色就是粉漆
+	var wood_dark := Color("#ddc69e") # 浅原木：掉漆露出的底色要浅，暗了就像泥点
+	var wood_light := Color("#efe2c4")
+	var paint := Color(0.99, 0.97, 0.95) # 漆底：近白，乘上猪本色就是哑光粉漆
 	var n := FastNoiseLite.new()
 	n.noise_type = FastNoiseLite.TYPE_SIMPLEX
 	n.frequency = 0.05
 	var n_grain := FastNoiseLite.new()
 	n_grain.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	n_grain.frequency = 0.35
+	n_grain.frequency = 0.3
 	var n_paint := FastNoiseLite.new()
 	n_paint.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	n_paint.frequency = 0.028 # 低频：掉漆只集中在少数几大块，不是满身斑点
+	n_paint.frequency = 0.02 # 极低频：整张贴图只有 3~4 块掉漆区，其余全是完整漆面
 	var n_edge := FastNoiseLite.new()
 	n_edge.noise_type = FastNoiseLite.TYPE_SIMPLEX
 	n_edge.frequency = 0.55
@@ -180,44 +180,45 @@ func _wood_pig_texture() -> ImageTexture:
 			var warp := n.get_noise_2d(float(x) * 0.6, float(y) * 0.3) * 2.2
 			var rings := pow(sin(float(y) * 0.16 + warp) * 0.5 + 0.5, 1.6)
 			var grain := n_grain.get_noise_2d(float(x), float(y) * 6.0) * 0.5 + 0.5
-			var c := wood_dark.lerp(wood_light, clampf(rings * 0.75 + grain * 0.5, 0.0, 1.0))
-			# 哑光粉漆整片盖住（约七成面积），磨损掉漆集中在边界清晰的几个小块：
-			# mask 低洼处掉漆露原木，陡过渡让漆面是"一整片漆"而不是满身斑点（斑点像黏土）。
-			var pm := n_paint.get_noise_2d(float(x), float(y)) + n_edge.get_noise_2d(float(x), float(y)) * 0.18
-			var paint_cover := clampf((pm + 0.30) * 5.5, 0.0, 1.0)
+			# 木纹细腻克制：低对比年轮+细纤维，只在掉漆处可见
+			var c := wood_dark.lerp(wood_light, clampf(rings * 0.5 + grain * 0.3, 0.0, 1.0))
+			# 完整哑光粉漆为底（约八成面积），只在几大块磨损处掉漆露浅原木：
+			# 过渡带很窄（近乎二值），漆面干净、掉漆边界撕扯不齐但绝不拖泥带水。
+			var pm := n_paint.get_noise_2d(float(x), float(y)) + n_edge.get_noise_2d(float(x), float(y)) * 0.15
+			var paint_cover := clampf((pm + 0.26) * 7.0, 0.0, 1.0)
 			c = c.lerp(paint, paint_cover)
 			img.set_pixel(x, y, c)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 20
-	# 细小划痕：斜着划过漆面与木面，多数划痕下露深木
-	for i in range(46):
+	# 少量细小划痕：短、浅，旧玩具的正常磨损
+	for i in range(26):
 		var px := rng.randf_range(0.0, float(size))
 		var py := rng.randf_range(0.0, float(size))
 		var ang := rng.randf_range(-0.5, 0.5) + (PI * 0.5 if rng.randf() < 0.5 else 0.0)
-		var ln := rng.randf_range(6.0, 34.0)
-		var shade := -0.10 if rng.randf() < 0.6 else 0.08
+		var ln := rng.randf_range(5.0, 20.0)
+		var shade := -0.06 if rng.randf() < 0.6 else 0.04
 		for s in range(int(ln)):
 			var xx := posmod(int(px + cos(ang) * float(s)), size)
 			var yy := posmod(int(py + sin(ang) * float(s)), size)
 			var pc := img.get_pixel(xx, yy)
 			img.set_pixel(xx, yy, Color(clampf(pc.r + shade, 0.0, 1.0), clampf(pc.g + shade, 0.0, 1.0), clampf(pc.b + shade, 0.0, 1.0)))
-	# 凹痕：小片暗斑，旧玩具磕磕碰碰的痕迹
-	for i in range(70):
+	# 少量小凹痕：旧玩具磕碰痕迹
+	for i in range(30):
 		var px2 := rng.randi_range(0, size - 2)
 		var py2 := rng.randi_range(0, size - 2)
-		var dd := rng.randf_range(0.05, 0.16)
+		var dd := rng.randf_range(0.04, 0.10)
 		for oy in range(2):
 			for ox in range(2):
 				img.set_pixel(px2 + ox, py2 + oy, img.get_pixel(px2 + ox, py2 + oy).darkened(dd))
 	# 手雕弧线：几条平滑的长凹槽，像用刻刀划出来的
-	for i in range(6):
+	for i in range(4):
 		var cy := rng.randf_range(20.0, float(size) - 20.0)
 		var amp := rng.randf_range(6.0, 16.0)
 		var freq := rng.randf_range(0.02, 0.05)
 		var ph := rng.randf_range(0.0, TAU)
 		for x in range(size):
 			var yy := posmod(int(cy + sin(float(x) * freq + ph) * amp), size)
-			img.set_pixel(x, yy, img.get_pixel(x, yy).darkened(0.22))
+			img.set_pixel(x, yy, img.get_pixel(x, yy).darkened(0.14))
 	_pig_wood_tex = ImageTexture.create_from_image(img)
 	return _pig_wood_tex
 
