@@ -30,6 +30,7 @@ const PIG_BOUNDS := Rect2(270, 320, 740, 310) # 小猪在赌桌上的活动范�
 const PIG3D_SIZE := 138.0 # 3D 猪纹理的绘制边长（基准；实际尺寸见 pig_size()，由 pig_draw_size 配置）
 const MAX_PARTICLES := 70 # 粒子上限：狂热时一秒连碎好几只，别让金币堆到掉帧
 const PIG3D_OFFSET := Vector2(0, -10) # 纹理中心相对猪身体中心的偏移
+const FLEE_RADIUS := 170.0 # 锤子靠这么近，怕锤的猪就开始逃（flee 倍率随猪种配置）
 const DESK_RECT := Rect2(110, 260, 1060, 396) # 桌面外框的屏幕矩形（3D 桌板按它反算尺寸）
 ## 账单考核浮层：上半屏是 HUD（标题 / 金额 / 计时），下半屏是一整块 3D 舞台。
 ## 舞台矩形同时是：3D 视口的像素尺寸、2D 回退的绘制区、金币与催债人的活动边界。
@@ -1080,6 +1081,36 @@ func pig_size() -> float:
 ## 一群猪如果没有互相排斥，几十秒后必然漂成一坨（随机游走的聚集是迟早的事），
 ## 桌面上就只剩下一团猪。给一点分离力道，它们才会一直铺满整张桌子。
 ## O(n²)：18 只 = 324 次/帧，可以忽略。
+## 单只活猪的一帧移动：锤子位置作为参数传入（_process 传真实鼠标位，测试传任意位）。
+## 移动性格（对齐原版）：锤子靠近时按 flee 倍率逃窜；flee 低的猪（胖警长 0.15）
+## 只被逼得挪两步；平时随机换向乱跑，不走直线。含边界反弹与走路弹跳相位。
+func update_pig_motion(pig: Dictionary, delta: float, hammer_at: Vector2) -> void:
+	var flee_mul := float(pig.type.get("flee", 0.0))
+	var away: Vector2 = pig.position - hammer_at
+	if flee_mul > 0.0 and away.length() < FLEE_RADIUS:
+		# 逃窜速度随 flee 缩放：胖警长（0.15）只被逼得挪两步，
+		# 小牛仔（1.3）吓得满桌乱窜；再封顶别快到锤子追不上也没意义。
+		var run_speed: float = float(settings.get("pig_speed", 90)) * maxf(float(pig.type.get("speed", 1.0)), flee_mul) * (1.2 + flee_mul * 0.8)
+		run_speed = minf(run_speed, float(settings.get("pig_speed", 90)) * 2.2)
+		pig.velocity = (away.normalized() if away.length() > 1.0 else Vector2.RIGHT) * run_speed
+	else:
+		pig.wander_t = float(pig.get("wander_t", 0.0)) - delta
+		if pig.wander_t <= 0.0: # 随机换向：快猪换得勤（更活蹦乱跳），慢猪懒得动
+			pig.wander_t = randf_range(0.8, 2.4) / maxf(float(pig.type.get("speed", 1.0)), 0.4)
+			pig.velocity = random_pig_velocity(pig.type)
+	pig.position += pig.velocity * delta * wheel_speed_mul() * (shop.speed_mul() if shop != null else 1.0)
+	# 走路弹跳：相位随位移推进（每 26px 一步、蹦一下），速度越快蹦得越快
+	pig.hop_phase = fmod(float(pig.get("hop_phase", 0.0)) + pig.velocity.length() * delta / 26.0 * PI, TAU)
+	if absf(pig.velocity.x) > 4.0: # 近乎竖直走时别乱翻朝向
+		pig.left = pig.velocity.x < 0.0
+	if pig.position.x < PIG_BOUNDS.position.x or pig.position.x > PIG_BOUNDS.end.x:
+		pig.velocity.x = -pig.velocity.x
+		pig.position.x = clampf(pig.position.x, PIG_BOUNDS.position.x, PIG_BOUNDS.end.x)
+	if pig.position.y < PIG_BOUNDS.position.y or pig.position.y > PIG_BOUNDS.end.y:
+		pig.velocity.y = -pig.velocity.y
+		pig.position.y = clampf(pig.position.y, PIG_BOUNDS.position.y, PIG_BOUNDS.end.y)
+
+
 func separate_pigs(delta: float) -> void:
 	var min_dist: float = 76.0 * (pig_size() / PIG3D_SIZE) # 跟着猪的尺寸走：猪缩小了就该靠得更近
 	for i in range(pigs.size()):
@@ -1374,17 +1405,7 @@ func _process(delta: float) -> void:
 			pig.flash = maxf(0.0, pig.flash - delta)
 			pig.hop = maxf(0.0, pig.hop - delta)
 			if pig.hp > 0:
-				pig.position += pig.velocity * delta * wheel_speed_mul() * (shop.speed_mul() if shop != null else 1.0)
-				# 走路弹跳：相位随位移推进（每 26px 一步、蹦一下），速度越快蹦得越快
-				pig.hop_phase = fmod(float(pig.get("hop_phase", 0.0)) + pig.velocity.length() * delta / 26.0 * PI, TAU)
-				if absf(pig.velocity.x) > 4.0: # 近乎竖直走时别乱翻朝向
-					pig.left = pig.velocity.x < 0.0
-				if pig.position.x < PIG_BOUNDS.position.x or pig.position.x > PIG_BOUNDS.end.x:
-					pig.velocity.x = -pig.velocity.x
-					pig.position.x = clampf(pig.position.x, PIG_BOUNDS.position.x, PIG_BOUNDS.end.x)
-				if pig.position.y < PIG_BOUNDS.position.y or pig.position.y > PIG_BOUNDS.end.y:
-					pig.velocity.y = -pig.velocity.y
-					pig.position.y = clampf(pig.position.y, PIG_BOUNDS.position.y, PIG_BOUNDS.end.y)
+				update_pig_motion(pig, delta, hammer_position)
 			else:
 				pig.respawn -= delta * wheel_speed_mul() # 转盘变慢/变快同样作用于刷新速度
 				if pig.respawn <= 0.0:
