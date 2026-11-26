@@ -118,27 +118,56 @@ func _build_obj_hammer() -> void:
 	_build_human_hand(hand_holder)
 
 
+func _segment(parent: Node3D, a: Vector3, b: Vector3, radius: float, mat: Material) -> MeshInstance3D:
+	## 两关节之间的一节指骨：胶囊沿 a→b 摆放，长度覆盖两端，接缝由关节球盖住。
+	var dir := b - a
+	var item := MeshInstance3D.new()
+	item.mesh = _capsule(radius, maxf(dir.length(), radius * 2.02))
+	item.material_override = mat
+	item.transform = Transform3D(Basis(Quaternion(Vector3.UP, dir.normalized())), (a + b) * 0.5)
+	parent.add_child(item)
+	return item
+
+
 func _build_human_hand(parent: Node3D) -> void:
-	## 攥柄拳头（俯视可读）：手背整块罩住锤柄，四条指脊横跨柄身，拇指斜扣，
-	## 肤色手腕 + 黑护腕，小臂出画。局部约定：柄轴 = Y（+Y 朝玩家），镜头在 -Z 一侧。
+	## 攥柄拳头：手背整块 + 四指各三节指骨（关节球做指节凸起）+ 两节斜扣拇指 + 黑护腕。
+	## 局部约定：柄轴 = Y（+Y 朝玩家），镜头在 -Z 一侧，锤头在 -X。
 	var skin := _material(Color("#eda57f"), 0.75)
-	var wristband := _material(Color("#26262c"), 0.7)
-	# 手背：略压扁的椭球，朝镜头一侧隆起成拳背
+	var joint_mat := _material(Color("#e2946e"), 0.8) # 关节略深一档，指节分段才看得清
 	var sphere := SphereMesh.new()
 	sphere.radius = 0.5
 	sphere.height = 1.0
 	sphere.radial_segments = 24
 	sphere.rings = 12
-	_mesh(parent, sphere, skin, Vector3(0.02, 0.55, -0.06), Vector3(0.75, 0.55, 0.40))
-	# 四指：沿 X 横跨锤柄的指脊，rotation.y 让 +X 端探向镜头、-X 端沉到柄后，呈包裹感
-	var finger := _capsule(0.062, 0.14)
+	# 手背：压扁椭球，朝镜头一侧隆起成拳背
+	_mesh(parent, sphere, skin, Vector3(0.04, 0.58, -0.08), Vector3(0.70, 0.55, 0.36))
+	# 四指：指根在 +X 侧，先横跨柄身前侧，再绕过 -X 侧收进柄后；长短按指序递变
+	var finger_len := [1.00, 1.06, 1.02, 0.90] # 食/中指长，小指短
 	for i in range(4):
-		var row := _mesh(parent, finger, skin, Vector3(-0.02, 0.40 + float(i) * 0.11, -0.24), Vector3(1.7, 1.0, 1.0))
-		row.rotation.y = 0.6
-	# 拇指：更粗的斜脊，扣在四指下方
-	var thumb := _mesh(parent, _capsule(0.085, 0.16), skin, Vector3(-0.04, 0.34, -0.26), Vector3(1.6, 1.0, 1.0))
-	thumb.rotation = Vector3(0.0, 0.45, 0.30)
+		var y := 0.78 - float(i) * 0.105
+		var s: float = finger_len[i]
+		var knuckle := Vector3(0.22, y, -0.14)
+		var pts := [
+			Vector3(0.22 - 0.20 * s, y, -0.21), # 近节：跨过柄身前侧
+			Vector3(0.22 - 0.34 * s, y - 0.01, -0.07), # 中节：绕到柄左侧
+			Vector3(0.22 - 0.40 * s, y - 0.02, 0.09) # 远节：收到柄后（被柄挡住）
+		]
+		var prev := knuckle
+		var r := 0.060
+		for p in pts:
+			_segment(parent, prev, p, r, skin)
+			_mesh(parent, sphere, joint_mat, p, Vector3.ONE * r * 2.1) # 关节球：指节凸起
+			prev = p
+			r *= 0.88 # 指尖略细
+		_mesh(parent, sphere, joint_mat, knuckle, Vector3.ONE * 0.16) # 掌指关节
+	# 拇指：两节，从掌侧斜 45° 扣下来压在四指根部
+	var t0 := Vector3(0.26, 0.40, -0.12)
+	var t1 := Vector3(0.10, 0.34, -0.22)
+	var t2 := Vector3(-0.06, 0.31, -0.20)
+	_segment(parent, t0, t1, 0.072, skin)
+	_segment(parent, t1, t2, 0.058, skin)
+	_mesh(parent, sphere, joint_mat, t1, Vector3.ONE * 0.17)
 	# 手腕、黑护腕、出画的小臂
 	_mesh(parent, _cylinder(0.155, 0.24), skin, Vector3(0.02, 0.90, -0.06))
-	_mesh(parent, _cylinder(0.19, 0.15), wristband, Vector3(0.02, 0.985, -0.06))
+	_mesh(parent, _cylinder(0.19, 0.15), _material(Color("#26262c"), 0.7), Vector3(0.02, 0.985, -0.06))
 	_mesh(parent, _cylinder(0.165, 0.40), skin, Vector3(0.02, 1.15, -0.06))
