@@ -1102,8 +1102,8 @@ func update_pig_motion(pig: Dictionary, delta: float, hammer_at: Vector2) -> voi
 			pig.wander_t = randf_range(0.8, 2.4) / maxf(float(pig.type.get("speed", 1.0)), 0.4)
 			pig.velocity = random_pig_velocity(pig.type)
 	pig.position += pig.velocity * delta * wheel_speed_mul() * (shop.speed_mul() if shop != null else 1.0)
-	# 走路弹跳：相位随位移推进（每 26px 一步、蹦一下），速度越快蹦得越快
-	pig.hop_phase = fmod(float(pig.get("hop_phase", 0.0)) + pig.velocity.length() * delta / 26.0 * PI, TAU)
+	# 走路弹跳：相位随位移推进（每 40px 一步、蹦一下），速度越快蹦得越快
+	pig.hop_phase = fmod(float(pig.get("hop_phase", 0.0)) + pig.velocity.length() * delta / 40.0 * PI, TAU)
 	if absf(pig.velocity.x) > 4.0: # 近乎竖直走时别乱翻朝向
 		pig.left = pig.velocity.x < 0.0
 	if pig.position.x < PIG_BOUNDS.position.x or pig.position.x > PIG_BOUNDS.end.x:
@@ -3559,7 +3559,7 @@ func draw_pig_sprite(pig: Dictionary, tex: Texture2D) -> void:
 	if pig.hp > 0:
 		var spd: float = pig.velocity.length()
 		var bounce := absf(sin(float(pig.get("hop_phase", 0.0))))
-		var hop_h := lerpf(14.0, 20.0, clampf(spd / 160.0, 0.0, 1.0)) # 快猪跳高一点
+		var hop_h := lerpf(20.0, 28.0, clampf(spd / 160.0, 0.0, 1.0)) # 快猪跳高一点
 		pos.y -= bounce * hop_h * k
 		if bounce < 0.25: # 落地瞬间：短暂挤压
 			squash = Vector2(1.08, 0.9)
