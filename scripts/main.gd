@@ -116,6 +116,8 @@ var combo_max := 0
 var shake := 0.0
 var shake_x := 0.0
 var shake_y := 0.0
+var hitstop := 0.0 # 命中停顿：命中瞬间冻结全场 2~3 帧，给打击加“卡肉”的确认感
+var punch := 0.0 # 镜头冲击：命中瞬间画面向锤头方向推一下（0~1 快速衰减）
 var dodgers: Array[Dictionary] = []
 var dodger_spawn_timer := 0.0
 var dodge_lives := 3
@@ -141,7 +143,11 @@ var use_3d := false # 由 balance.json 的 pig_3d 控制，headless 下强制关
 var use_desk_3d := false # 由 balance.json 的 desk_3d 控制（可单独关桌子、保留 3D 猪）
 
 func _ready() -> void:
-	font = load("res://assets/fonts/NotoSansSC.ttf")
+	var _font_file := FontFile.new()
+	if _font_file.load_dynamic_font("res://assets/fonts/SmileySans-Oblique.ttf") == OK:
+		font = _font_file # 得意黑：现代活泼，替代正式的思源黑体
+	else:
+		font = load("res://assets/fonts/NotoSansSC.ttf") # 得意黑加载失败时回退思源黑体
 	settings = JSON.parse_string(FileAccess.get_file_as_string(SETTINGS_PATH))
 	base_stamina_max = float(settings.get("stamina_max", 100))
 	var parsed = JSON.parse_string(FileAccess.get_file_as_string(STORY_PATH))
@@ -981,6 +987,10 @@ func _process(delta: float) -> void:
 		queue_redraw()
 		return
 	elapsed += delta
+	if hitstop > 0.0: # 命中停顿：只冻结 hitstop 这么长时间，剩余 delta 照常推进
+		var frozen := minf(hitstop, delta)
+		hitstop -= frozen
+		delta -= frozen
 	if score > last_observed_score: # 累计每笔新增收入；还账扣款不会倒扣进度
 		earned_total += score - last_observed_score
 	last_observed_score = score
@@ -995,6 +1005,7 @@ func _process(delta: float) -> void:
 	cooldown = maxf(0.0, cooldown - delta)
 	swing = maxf(0.0, swing - delta)
 	impact_timer = maxf(0.0, impact_timer - delta)
+	punch = maxf(0.0, punch - delta * 6.0) # 镜头冲击快速衰减，回弹要干脆
 	bonus_timer = maxf(0.0, bonus_timer - delta)
 	collection_flash = maxf(0.0, collection_flash - delta)
 	# 停电暗化渐入渐出（0.6 秒），不要闪
@@ -1329,8 +1340,12 @@ func strike(point: Vector2) -> void:
 			impact_position = point
 			impact_timer = 0.18
 			impact_broken = pig.hp <= 0
-			shake = maxf(shake, 0.065)
+			hitstop = 0.045 # 命中停顿：冻结 2~3 帧
+			punch = 1.0 if not impact_broken else 1.4 # 镜头冲击：破猪推得更狠
+			shake = maxf(shake, 0.22) # 命中震动：0.065 → 0.22，让每一下都“实”起来
 			Sound.play("pop", 0.65 if impact_broken else 0.9, 0.65 if impact_broken else 0.35)
+			if not impact_broken:
+				spawn_hit_shards(point, String(pig.type.get("id", "piggy"))) # 没碎的猪也撒陶瓷碎屑，命中不留白
 			if bool(pig.get("wheel_gold", false)): # 转盘金猪走专属结算：一锤 +¥200，压扁回弹后爆金币
 				landed = true
 				_resolve_wheel_gold_hit(pig)
@@ -1342,7 +1357,10 @@ func strike(point: Vector2) -> void:
 			if combo_count == int(settings.get("combo_threshold_fever", 5)):
 				Sound.play("crit") # 连击刚到狂热线：一声上行琶音，手心发烫
 			var base_pitch := 1.1 if pig.hp <= 0 else 0.85
-			Sound.play("crack", minf(1.5, base_pitch + float(settings.get("combo_pitch_step", 0.05)) * (combo_count - 1)))
+			# 连击音高走五声音阶（1/2/b3/3/5/6/8 度），越敲越像上行旋律，而不是单调线性爬升
+			var _pent: Array[float] = [1.0, 1.122, 1.26, 1.335, 1.5, 1.682, 1.888, 2.0]
+			var _crack_pitch := base_pitch * _pent[clampi(combo_count - 1, 0, _pent.size() - 1)]
+			Sound.play("crack", _crack_pitch)
 			landed = true
 			if pig.hp <= 0:
 				settle_card_break(pig, false)
@@ -1374,7 +1392,8 @@ func settle_card_break(pig: Dictionary, secondary: bool) -> void:
 	if pig.hp > 0 or float(pig.respawn) > 0.0:
 		return
 	pig.respawn = float(settings.respawn_seconds)
-	shake = float(settings.get("shake_duration", 0.12))
+	shake = float(settings.get("shake_duration", 0.18)) # 破猪震动加长，配合低频咚
+	Sound.play("sub", 1.0, 1.0) # 低频冲击：让整个画面和桌面一起震一下
 	var kind: String = String(pig.type.get("id", "piggy"))
 	var gain := pig_value(pig.type)
 	if gain > 0:
@@ -1776,6 +1795,20 @@ func spawn_particles(center: Vector2, kind := "", value := 0) -> void:
 		particles.append({"position": center, "velocity": Vector2(vx, vy),
 			"life": randf_range(0.6, 1.0), "coin": is_coin, "tint": kind,
 			"spin": randf_range(0.0, TAU), "spin_speed": randf_range(4.0, 9.0)})
+
+
+## 命中未碎猪时的少量陶瓷碎屑：普通命中也要有“打到东西”的粒子反馈，别让每一下都像挥空。
+func spawn_hit_shards(center: Vector2, tint := "") -> void:
+	for i in range(5):
+		if particles.size() >= MAX_PARTICLES:
+			break
+		var speed := randf_range(90.0, 200.0)
+		var vx := (1.0 if randf() < 0.5 else -1.0) * randf_range(0.3, 1.0) * speed
+		var vy := -randf_range(0.4, 0.9) * speed
+		particles.append({"position": center, "velocity": Vector2(vx, vy),
+			"life": randf_range(0.35, 0.6), "coin": false, "tint": tint,
+			"spin": randf_range(0.0, TAU), "spin_speed": randf_range(3.0, 7.0)})
+
 
 func text_at(value: String, pos: Vector2, size: int, color := Color("#f4e0b8")) -> void:
 	draw_string(font, pos, value, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
@@ -2186,14 +2219,22 @@ func draw_cover_texture(texture: Texture2D, center: Vector2, longest_side: float
 
 
 func _draw() -> void:
-	if bg_tex != null: # 西部酒馆全景：拉伸铺满，再压一层暗保持 HUD 可读
-		draw_texture_rect(bg_tex, Rect2(0, 0, 1280, 800), false)
-		draw_rect(Rect2(0, 0, 1280, 800), Color(0.0, 0.0, 0.0, 0.35))
+	# 场景动态化：背景层视差跟随手部 + 命中镜头冲击，让静态酒馆"活"起来
+	var _cam_center := Vector2(640.0, 400.0)
+	var _cam_parallax := -(hammer_position - _cam_center) * 0.035 # 手往右，背景往左微移，制造纵深
+	var _cam_p := punch * punch
+	var _cam_dir: Vector2 = (impact_position - _cam_center).normalized() if impact_position.distance_to(_cam_center) > 1.0 else Vector2.UP
+	var _cam_off := _cam_parallax + _cam_dir * (-9.0 * _cam_p) # 命中瞬间向锤头反方向推一下
+	draw_set_transform(_cam_off, 0.0, Vector2.ONE)
+	if bg_tex != null: # 西部酒馆全景：多画一圈边距，视差偏移时不露边
+		draw_texture_rect(bg_tex, Rect2(-40.0, -40.0, 1360.0, 880.0), false)
+		draw_rect(Rect2(-40.0, -40.0, 1360.0, 880.0), Color(0.0, 0.0, 0.0, 0.35))
 	else:
 		draw_rect(Rect2(0, 0, 1280, 800), Color("#241610")) # 背景图没读到时用回纯色底
 		draw_circle(Vector2(1050, 180), 380, Color("#312012"))
 	draw_watchers() # 桌后那排黑影：画在桌子之前，才像"站在你身后看着"
 	draw_desk() # 桌面先铺，后面的 HUD / 猪 / 卡片都在它上面
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE) # 背景层结束，恢复默认变换，前景不动
 	if intro_open:
 		draw_intro()
 		return
@@ -2399,7 +2440,7 @@ func draw_pig_sprite(pig: Dictionary, tex: Texture2D) -> void:
 	var flip := 1.0 if bool(pig.get("left", true)) else -1.0 # 素材朝左画；往右走时镜像
 	if pig.flash > 0.0:
 		var compression := sin(clampf(float(pig.flash) / 0.14, 0.0, 1.0) * PI)
-		squash *= Vector2(1.0 + 0.22 * compression, 1.0 - 0.25 * compression)
+		squash *= Vector2(1.0 + 0.34 * compression, 1.0 - 0.38 * compression)
 	pos.y += (1.0 - squash.y) * side * 0.5 # 以脚为轴挤压：中心下移，脚底保持贴地
 	draw_set_transform(pos, 0.0, Vector2(flip * squash.x * fit, squash.y * fit))
 	draw_texture(tex, -ts / 2.0)
@@ -2528,39 +2569,39 @@ func draw_hammer() -> void:
 		draw_circle(hammer_position, 2.0, aim_color)
 	var over := ui_hover_at(get_local_mouse_position())
 	var swing_progress := clampf(1.0 - swing / 0.16, 0.0, 1.0)
-	var punch := 0.0
-	if swing > 0.0:
-		# Instant impact, then an eased rebound; keep the click responsive.
-		punch = pow(1.0 - swing_progress, 2.0)
-	var angle := 0.28 * punch - sin(swing_progress * PI) * 0.42 # 静止斜角由 3D 模型本身负责，挥锤只叠加动画角度
+	var plunge := sin(swing_progress * PI) # 砸-弹周期 0→1→0，一下一上
+	var drop := plunge * 30.0 # 锤头向下砸 30px，真正压到猪身上再弹回
+	var angle := -plunge * 0.5 # 下砸时锤头前倾，砸出落下去的气势
 	var k: float = 0.68 if over else 1.0 # 悬停按钮：缩小并往右下让开，别挡住按钮本身
-	var pivot := hammer_position + Vector2(13, -5) + Vector2(-8, 24) * punch
+	var pivot := hammer_position + Vector2(13, -5) + Vector2(0, drop)
 	if impact_timer > 0.0:
 		var progress := 1.0 - impact_timer / 0.18
-		var radius := lerpf(9.0, 48.0 if impact_broken else 30.0, progress)
-		var color := Color(1.0, 0.85, 0.48, (1.0 - progress) * 0.85)
-		draw_arc(impact_position, radius, 0.0, TAU, 32, color, 3.0 * (1.0 - progress) + 1.0, true)
+		var radius := lerpf(9.0, 52.0 if impact_broken else 34.0, progress)
+		var color := Color(1.0, 0.85, 0.48, (1.0 - progress) * 0.95)
+		draw_arc(impact_position, radius, 0.0, TAU, 32, color, 4.0 * (1.0 - progress) + 1.5, true)
+		# 第二层：稍小的内圈，错开相位更有“炸开”的层次
+		draw_arc(impact_position, radius * 0.62, 0.0, TAU, 32, Color(1.0, 0.95, 0.7, (1.0 - progress) * 0.55), 2.5 * (1.0 - progress) + 1.0, true)
 		for i in range(6):
 			var direction := Vector2.RIGHT.rotated(float(i) * TAU / 6.0 + 0.2)
-			draw_line(impact_position + direction * radius * 0.6, impact_position + direction * (radius + 9.0), color, 2.0, true)
+			draw_line(impact_position + direction * radius * 0.55, impact_position + direction * (radius + 11.0), color, 3.0 * (1.0 - progress) + 1.0, true)
 	if over:
 		pivot += Vector2(58, 46)
 	if SHOW_HAND:
 		# 握点取柄的下段（不是末端）：柄尾要露在拳头外面，"握着"才看得懂
 		draw_shadow_arm(pivot + Vector2(19, 74).rotated(angle))
-	if hammer_tex != null: # 贴图锤：皮手套握木柄锤，跟随鼠标，挥锤下压+旋转沿用 swing 动画
-		var hs := hammer_tex.get_size()
-		var hfit := 250.0 / maxf(hs.x, hs.y) # 最长边约 250：比原 3D 锤略大，握锤的手也进了画面
-		draw_set_transform(pivot, angle, Vector2(k * hfit, k * hfit))
-		draw_texture(hammer_tex, -hs / 2.0)
-		draw_set_transform(Vector2.ZERO)
-		return
-	if hammer3d != null:
+	if hammer3d != null: # 3D 木桶锤优先：真正立体的锤头，砸下去有体积感
 		draw_set_transform(pivot, angle, Vector2(k, k))
 		draw_texture_rect(hammer3d.get_texture(), Rect2(-104, -104, 208, 208), false)
 		draw_set_transform(Vector2.ZERO)
 		if SHOW_HAND:
 			draw_shadow_fist(pivot + Vector2(19, 74).rotated(angle), angle)
+		return
+	if hammer_tex != null: # 贴图锤回退：headless 或没有 3D 视口时用
+		var hs := hammer_tex.get_size()
+		var hfit := 250.0 / maxf(hs.x, hs.y)
+		draw_set_transform(pivot, angle, Vector2(k * hfit, k * hfit))
+		draw_texture(hammer_tex, -hs / 2.0)
+		draw_set_transform(Vector2.ZERO)
 		return
 	draw_set_transform(pivot, angle, Vector2(k, k))
 	panel(Rect2(11, -2, 17, 100), Color("#5e412f"), 6)
@@ -2646,21 +2687,27 @@ func draw_shadow_fist(grip: Vector2, angle: float) -> void:
 
 ## 卡片外壳：投影 + 描边 + 顶部卡头条（标题在卡内，不再浮在卡片上方）
 func card_shell(title: String, accent: Color) -> void:
-	panel(Rect2(CARD_RECT.position + Vector2(1, 7), CARD_RECT.size + Vector2(12, 12)), Color(0.02, 0.05, 0.05, 0.5), 24) # 投影
-	panel(CARD_RECT, accent.darkened(0.6), 22) # 外框（描边感）
-	var inner := CARD_RECT.grow(-4)
-	panel(inner, Color("#15212c"), 19) # 卡面
-	panel(Rect2(inner.position.x, inner.position.y, inner.size.x, 48), accent.darkened(0.32), 19) # 卡头
-	draw_line(Vector2(inner.position.x, inner.position.y + 48), Vector2(inner.end.x, inner.position.y + 48), accent.lightened(0.15), 3)
-	text_center(title, CARD_RECT.get_center().x, inner.position.y + 36, 25, accent.lightened(0.3))
+	panel(Rect2(CARD_RECT.position + Vector2(2, 9), CARD_RECT.size + Vector2(14, 14)), Color(0.05, 0.03, 0.01, 0.55), 22) # 投影
+	panel(Rect2(CARD_RECT.position + Vector2(-3, -3), CARD_RECT.size + Vector2(6, 6)), Color("#3a2412"), 20) # 深棕做旧描边（扑克黑边感）
+	var inner := CARD_RECT.grow(-5)
+	panel(inner, Color("#e6d3a3"), 16) # 牛皮纸卡面（泛黄米白，做旧）
+	panel(inner.grow(-7), Color("#efe0bd"), 13) # 内圈亮纸边
+	draw_rect(inner.grow(-7), Color("#8a2f24"), false, 2.0) # 复古红细描边
+	panel(Rect2(inner.position.x + 7, inner.position.y + 7, inner.size.x - 14, 44), Color("#8a2f24"), 10) # 复古红标题带
+	text_center(title, CARD_RECT.get_center().x, inner.position.y + 37, 24, Color("#f7e8c8"))
+	text_at('♠', inner.position + Vector2(13, 27), 18, Color("#2a2018")) # 四角花色（黑桃/红桃）
+	text_at('♥', Vector2(inner.end.x - 29, inner.position.y + 27), 18, Color("#8a2f24"))
+	text_at('♥', Vector2(inner.position.x + 13, inner.end.y - 12), 18, Color("#8a2f24"))
+	text_at('♠', Vector2(inner.end.x - 29, inner.end.y - 12), 18, Color("#2a2018"))
 
 
 ## 卡片中间的圆形徽章，放主数字（金额 / ×2），比纯文字更醒目
 func card_badge(accent: Color, value: String, size: int) -> void:
 	var c := Vector2(CARD_RECT.get_center().x, CARD_RECT.position.y + 110)
-	draw_circle(c, 48, accent.darkened(0.5))
-	draw_circle(c, 42, accent.darkened(0.18))
-	draw_arc(c, 42, 0.0, TAU, 32, accent.lightened(0.25), 3)
+	draw_circle(c, 48, Color("#7a4f18")) # 复古金徽章：暗金描边
+	draw_circle(c, 42, Color("#c9973f"))
+	draw_arc(c, 42, 0.0, TAU, 32, Color("#f0c96a"), 3)
+	draw_arc(c, 35, 0.0, TAU, 32, Color("#8a5a1a"), 1.5)
 	text_center(value, c.x, c.y + size * 0.36, size, Color("#fff6e2"))
 
 

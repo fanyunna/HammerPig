@@ -27,6 +27,7 @@ var _cam: Camera3D
 
 static var _felt_tex: ImageTexture
 static var _wood_tex: ImageTexture
+static var _wood_img: Image
 
 
 ## 台面：酒馆旧木桌 —— 深棕木纹两色 + 高频颗粒（毛糙感）+ 大块深浅（磨损压痕）
@@ -41,8 +42,8 @@ func _felt_texture() -> ImageTexture:
 	n2.frequency = 0.02
 	var size := 256
 	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
-	var dark := Color("#4a2f18")
-	var light := Color("#6e4a2a")
+	var dark := Color("#3a2412")
+	var light := Color("#7a5230")
 	for y in range(size):
 		for x in range(size):
 			var fuzz := n.get_noise_2d(float(x), float(y)) * 0.5 + 0.5 # 毛绒颗粒
@@ -145,27 +146,59 @@ func _screen_to_desk(p: Vector2) -> Vector3:
 	return origin + dir * (-origin.y / dir.y)
 
 
-## 木纹：沿 x 方向的年轮条纹 + 噪声扭曲 + 细纤维，现场生成，不依赖外部贴图
+## 木纹：年轮 + 细纤维 + 大块色差三层叠加，颜色深棕到浅棕明显分层（对比度拉大，别糊成一团）
 func _wood_texture() -> ImageTexture:
 	if _wood_tex != null:
 		return _wood_tex
 	var n := FastNoiseLite.new()
 	n.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	n.frequency = 0.03
+	n.frequency = 0.05
+	var n2 := FastNoiseLite.new()
+	n2.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	n2.frequency = 0.5
 	var size := 256
 	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
-	var dark := Color("#9c7852")
-	var light := Color("#ab8760")
+	var dark := Color("#4f341c")
+	var mid := Color("#8a5a32")
+	var light := Color("#b8864a")
 	for y in range(size):
 		for x in range(size):
-			# 年轮：沿 x 方向的长条，低频噪声缓慢扭曲（扭曲幅度太大就成蛇皮了）
-			var warp := n.get_noise_2d(float(x) * 0.03, float(y) * 0.015) * 1.6
-			var rings := pow(sin(float(y) * 0.22 + warp) * 0.5 + 0.5, 1.4)
-			# 木纤维：沿 x 延伸的细线 —— x 方向低频、y 方向高频才对
-			var grain := n.get_noise_2d(float(x) * 0.4, float(y) * 2.5) * 0.06
-			img.set_pixel(x, y, dark.lerp(light, clampf(rings + grain, 0.0, 1.0)))
+			# 年轮：低频大条纹，缓慢扭曲
+			var warp := n.get_noise_2d(float(x) * 0.02, float(y) * 0.01) * 2.2
+			var rings := sin(float(y) * 0.16 + warp) * 0.5 + 0.5
+			# 木纤维：细密条纹
+			var grain := n2.get_noise_2d(float(x) * 0.05, float(y) * 2.8) * 0.5 + 0.5
+			# 大块明暗：木板的自然色差
+			var shade := n.get_noise_2d(float(x) * 0.008, float(y) * 0.008) * 0.5 + 0.5
+			var v := clampf(rings * 0.5 + grain * 0.28 + shade * 0.22, 0.0, 1.0)
+			var col := dark
+			if v < 0.5:
+				col = dark.lerp(mid, v / 0.5)
+			else:
+				col = mid.lerp(light, (v - 0.5) / 0.5)
+			img.set_pixel(x, y, col)
+	_wood_img = img
 	_wood_tex = ImageTexture.create_from_image(img)
 	return _wood_tex
+
+
+## 从木纹亮度图派生法线贴图：让木纹有真实凹凸，而不是贴在平面上的塑料
+func _wood_normal() -> ImageTexture:
+	if _wood_img == null:
+		_wood_texture()
+	var img := _wood_img
+	var size := img.get_width()
+	var nmap := Image.create(size, size, false, Image.FORMAT_RGB8)
+	var strength := 6.0
+	for y in range(size):
+		for x in range(size):
+			var hx := img.get_pixel((x + 1) % size, y).r - img.get_pixel((x - 1 + size) % size, y).r
+			var hy := img.get_pixel(x, (y + 1) % size).r - img.get_pixel(x, (y - 1 + size) % size).r
+			var nx := clampf(-hx * strength, -1.0, 1.0)
+			var ny := clampf(-hy * strength, -1.0, 1.0)
+			var l := sqrt(nx * nx + ny * ny + 1.0)
+			nmap.set_pixel(x, y, Color(nx / l * 0.5 + 0.5, ny / l * 0.5 + 0.5, 0.5 / l + 0.5))
+	return ImageTexture.create_from_image(nmap)
 
 
 func _wood_mat(scale_u: float, scale_v: float, rough := 0.62) -> StandardMaterial3D:
@@ -174,6 +207,11 @@ func _wood_mat(scale_u: float, scale_v: float, rough := 0.62) -> StandardMateria
 	m.uv1_scale = Vector3(scale_u, scale_v, 1.0)
 	m.roughness = rough
 	m.metallic = 0.0
+	m.normal_enabled = true
+	m.normal_texture = _wood_normal()
+	m.normal_scale = 0.8 # 木纹凹凸：去掉贴上去的塑料平面感
+	m.clearcoat = 0.25 # 木器漆光泽：旧木桌也上过一层漆
+	m.clearcoat_roughness = 0.7
 	return m
 
 
@@ -242,8 +280,7 @@ func _build_scene() -> void:
 	rim.material_override = _wood_mat(desk_w / 1.2, desk_d / 1.2, 0.38)
 	rim.position = top.position + Vector3(0.0, -DESK_THICK * 0.55, 0.0)
 	add_child(rim)
-	var rail_mat := _wood_mat(desk_w / 1.2, desk_d / 1.2, 0.34)
-	var gold := _gold_mat()
+	var rail_mat := _wood_mat(desk_w / 1.2, desk_d / 1.2, 0.62) # 旧木桌沿：更粗糙，别像赌桌那么亮
 	var rail_y := 0.09
 	var rail_z := desk_d / 2.0 - 0.06
 	var rail_x := desk_w / 2.0 - 0.06
@@ -251,10 +288,6 @@ func _build_scene() -> void:
 	_add_box(Vector3(0.0, rail_y, desk_cz + rail_z), Vector3(desk_w + 0.08, 0.14, 0.30), rail_mat)
 	_add_box(Vector3(-rail_x, rail_y, desk_cz), Vector3(0.30, 0.14, desk_d - 0.28), rail_mat)
 	_add_box(Vector3(rail_x, rail_y, desk_cz), Vector3(0.30, 0.14, desk_d - 0.28), rail_mat)
-	_add_box(Vector3(0.0, rail_y + 0.073, desk_cz - rail_z + 0.16), Vector3(desk_w - 0.12, 0.012, 0.018), gold)
-	_add_box(Vector3(0.0, rail_y + 0.073, desk_cz + rail_z - 0.16), Vector3(desk_w - 0.12, 0.012, 0.018), gold)
-	_add_box(Vector3(-rail_x + 0.16, rail_y + 0.073, desk_cz), Vector3(0.018, 0.012, desk_d - 0.40), gold)
-	_add_box(Vector3(rail_x - 0.16, rail_y + 0.073, desk_cz), Vector3(0.018, 0.012, desk_d - 0.40), gold)
 
 	_decorate(frame) # 桌边账单纸、散落零钱和马克杯，猪活动区保持畅通
 
@@ -296,8 +329,8 @@ func _desk_frame() -> Dictionary:
 	}
 
 
-## 赌桌的桌面装饰：沿桌沿一圈金色细线、中央两圈下注环、四角筹码堆、散落的几张牌。
-## 全部摆在 y≈0.014 的桌面上，压得很薄，猪走过去不会被穿模。
+## 西部酒馆木桌的装饰：散落的钱币、账本催缴单、酒瓶木杯、麻布垫。
+## 全部摆在 y≈0.018 的桌面上，压得很薄，猪走过去不会被穿模。
 func _decorate(frame: Dictionary) -> void:
 	var w: float = frame.w
 	var d: float = frame.d
@@ -306,15 +339,7 @@ func _decorate(frame: Dictionary) -> void:
 	var far_z := cz - d / 2.0 + 0.55
 	var paper_mat := _plain_mat(Color("#e8ddc4"), 0.88)
 	var paper_shadow := _plain_mat(Color("#a58c67"), 0.9)
-	var gold_mat := _gold_mat()
-	# 中央下注环与靠玩家一侧的下注位：它们是贴面装饰，不会挡住猪的移动或点击。
-	_add_ring(Vector3(0.0, y + 0.020, cz), 0.82, gold_mat, 0.014)
-	_add_ring(Vector3(0.0, y + 0.020, cz), 1.08, gold_mat, 0.009)
-	_add_ring(Vector3(0.0, y + 0.020, cz), 0.20, gold_mat, 0.010)
-	for i in range(5):
-		var slot_x := lerpf(-1.35, 1.35, float(i) / 4.0)
-		_add_ring(Vector3(slot_x, y + 0.020, cz + d * 0.28), 0.12, gold_mat, 0.008)
-	# 桌角散叠的催缴单，顶纸印一道项目红线。
+	# 桌角散叠的催缴单，顶纸印一道项目红线（还债主题）。
 	for i in range(3):
 		var sheet := MeshInstance3D.new()
 		var sheet_mesh := BoxMesh.new()
@@ -325,22 +350,54 @@ func _decorate(frame: Dictionary) -> void:
 		sheet.rotation.y = -0.12 + float(i) * 0.10
 		add_child(sheet)
 	_add_box(Vector3(-w / 2.0 + 0.72, y + 0.067, far_z + 0.02), Vector3(0.55, 0.008, 0.045), _plain_mat(Color("#b84d3a"), 0.8), -0.12)
-	# 金币与筹码混放，暗示玩家刚押下去的一笔钱。
+	# 摊开的账本：厚皮封面 + 一页纸，呼应还债主题。
+	var ledger := MeshInstance3D.new()
+	var ledger_mesh := BoxMesh.new()
+	ledger_mesh.size = Vector3(0.66, 0.05, 0.9)
+	ledger.mesh = ledger_mesh
+	ledger.material_override = _plain_mat(Color("#3a2a1a"), 0.85)
+	ledger.position = Vector3(0.0, y + 0.03, cz + d * 0.20)
+	add_child(ledger)
+	_add_box(Vector3(0.0, y + 0.06, cz + d * 0.20), Vector3(0.6, 0.01, 0.84), paper_mat, 0.0)
+	# 散落的金币：存钱罐打出来的钱，暗示刚砸过一锤。
 	var coin_mat := _gold_mat()
 	for i in range(4):
 		_add_disc(Vector3(w / 2.0 - 0.72 + float(i % 2) * 0.13, y + 0.025 + float(i / 2) * 0.035, far_z + 0.54 + float(i / 2) * 0.10), 0.095, 0.035, coin_mat)
-	var chip_mats: Array[Material] = [
-		_plain_mat(Color("#a63832"), 0.45),
-		_plain_mat(Color("#233e70"), 0.45),
-		_plain_mat(Color("#262624"), 0.5),
-	]
-	_add_chip_stack(w / 2.0 - 0.62, far_z + 1.00, 5, chip_mats)
-	_add_chip_stack(w / 2.0 - 1.02, far_z + 1.28, 3, chip_mats)
-	# 两张斜放的扑克牌：暖白牌面配红/黑背纹，强化赌场桌的识别度。
-	var card_red := _plain_mat(Color("#a83b32"), 0.6)
-	var card_black := _plain_mat(Color("#26302d"), 0.7)
-	var card_x := w / 2.0 - 1.55
-	var card_z := far_z + 0.92
-	_add_box(Vector3(card_x - 0.12, y + 0.027, card_z), Vector3(0.44, 0.018, 0.66), card_red, -0.18)
-	_add_box(Vector3(card_x + 0.17, y + 0.038, card_z + 0.05), Vector3(0.44, 0.018, 0.66), paper_mat, 0.12)
-	_add_box(Vector3(card_x + 0.17, y + 0.050, card_z + 0.05), Vector3(0.20, 0.006, 0.24), card_black, 0.12)
+	# 酒瓶：深色玻璃瓶（瓶身 + 瓶颈），西部酒馆的标配。
+	var bottle_mat := _plain_mat(Color("#3a2c20"), 0.28, 0.12)
+	for i in range(2):
+		var bx := w / 2.0 - 0.95 - float(i) * 0.6
+		var bottle := MeshInstance3D.new()
+		var bm := CylinderMesh.new()
+		bm.top_radius = 0.13
+		bm.bottom_radius = 0.16
+		bm.height = 0.34
+		bottle.mesh = bm
+		bottle.material_override = bottle_mat
+		bottle.position = Vector3(bx, y + 0.18, far_z + 1.0)
+		add_child(bottle)
+		var neck := MeshInstance3D.new()
+		var nm := CylinderMesh.new()
+		nm.top_radius = 0.05
+		nm.bottom_radius = 0.05
+		nm.height = 0.14
+		neck.mesh = nm
+		neck.material_override = bottle_mat
+		neck.position = Vector3(bx, y + 0.42, far_z + 1.0)
+		add_child(neck)
+	# 木杯：粗糙的旧木杯，西部酒馆的粗粝感。
+	var mug_mat := _plain_mat(Color("#6e4a2a"), 0.85)
+	for i in range(2):
+		var mx := w / 2.0 - 0.4 - float(i) * 0.6
+		var mug := MeshInstance3D.new()
+		var mm := CylinderMesh.new()
+		mm.top_radius = 0.14
+		mm.bottom_radius = 0.11
+		mm.height = 0.22
+		mug.mesh = mm
+		mug.material_override = mug_mat
+		mug.position = Vector3(mx, y + 0.11, far_z + 1.1)
+		add_child(mug)
+	# 麻布垫：一块粗糙的麻布，铺在桌面上。
+	var cloth_mat := _plain_mat(Color("#8a6a4a"), 0.95)
+	_add_box(Vector3(-w / 2.0 + 1.5, y + 0.02, cz - d * 0.18), Vector3(0.9, 0.02, 0.7), cloth_mat, 0.3)
