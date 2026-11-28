@@ -211,7 +211,7 @@ var base_stamina_max := 100.0
 var stamina := 100.0
 var stamina_flash := 0.0
 var end_reason := "" # "target" / "exhausted"
-var font := SystemFont.new()
+var font: Font = SystemFont.new() # Font 基类：可换成 FontFile 加载得意黑
 
 var pig_tex: Dictionary = {} # 猪贴图：id → Texture2D。桌面猪已全部改走 3D 实时渲染，
 # 贴图只保留给序幕封面等 UI 用（draw_cover_texture(pig_tex["piggy"])）
@@ -224,7 +224,11 @@ var use_3d := false # 由 balance.json 的 pig_3d 控制，headless 下强制关
 var use_desk_3d := false # 由 balance.json 的 desk_3d 控制（可单独关桌子、保留 3D 猪）
 
 func _ready() -> void:
-	font.font_names = PackedStringArray(["PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Noto Sans CJK SC"])
+	var _font_file := FontFile.new()
+	if _font_file.load_dynamic_font("res://assets/fonts/SmileySans-Oblique.ttf") == OK:
+		font = _font_file # 得意黑：现代活泼，替代正式的系统字体
+	else:
+		font.font_names = PackedStringArray(["PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Noto Sans CJK SC"])
 	settings = JSON.parse_string(FileAccess.get_file_as_string(SETTINGS_PATH))
 	base_stamina_max = float(settings.get("stamina_max", 100))
 	var parsed = JSON.parse_string(FileAccess.get_file_as_string(STORY_PATH))
@@ -1960,9 +1964,11 @@ func strike(point: Vector2, power := 1.0) -> void:
 			impact_position = point
 			impact_timer = 0.18
 			impact_broken = pig.hp <= 0
-			shake = maxf(shake, 0.065)
+			shake = maxf(shake, 0.22) # 命中震动增强：0.065 → 0.22
 			hit_stop = maxf(hit_stop, float(settings.get("hit_stop_hit", 0.06))) # 顿帧：不管碎没碎，手感都在
 			Sound.play("pop", 0.65 if impact_broken else 0.9, 0.65 if impact_broken else 0.35)
+			if not impact_broken:
+				spawn_hit_shards(point, String(pig.type.get("id", "piggy"))) # 没碎的猪也撒陶瓷碎屑，命中不留白
 			if bool(pig.get("wheel_gold", false)) and pig.hp <= 0: # 转盘金猪走专属结算：一锤 +¥200，压扁回弹后爆金币
 				landed = true
 				_resolve_wheel_gold_hit(pig)
@@ -1974,7 +1980,10 @@ func strike(point: Vector2, power := 1.0) -> void:
 			if combo_count == int(settings.get("combo_threshold_fever", 5)):
 				Sound.play("crit") # 连击刚到狂热线：一声上行琶音，手心发烫
 			var base_pitch := 1.1 if pig.hp <= 0 else 0.85
-			Sound.play("crack", minf(1.5, base_pitch + float(settings.get("combo_pitch_step", 0.05)) * (combo_count - 1)))
+			# 连击音高走五声音阶（1/2/b3/3/5/6/8 度），越敲越像上行旋律
+			var _pent: Array[float] = [1.0, 1.122, 1.26, 1.335, 1.5, 1.682, 1.888, 2.0]
+			var _crack_pitch := base_pitch * _pent[clampi(combo_count - 1, 0, _pent.size() - 1)]
+			Sound.play("crack", _crack_pitch)
 			landed = true
 			if pig.hp <= 0:
 				pig.respawn = float(settings.respawn_seconds)
@@ -2690,6 +2699,20 @@ func spawn_particles(center: Vector2, kind := "", value := 0) -> void:
 		particles.append({"position": center, "velocity": Vector2(vx, vy),
 			"life": randf_range(0.6, 1.0), "coin": is_coin, "tint": kind,
 			"spin": randf_range(0.0, TAU), "spin_speed": randf_range(4.0, 9.0)})
+
+
+## 命中未碎猪时的少量陶瓷碎屑：普通命中也要有打到东西的粒子反馈
+func spawn_hit_shards(center: Vector2, tint := "") -> void:
+	for i in range(5):
+		if particles.size() >= MAX_PARTICLES:
+			break
+		var speed := randf_range(90.0, 200.0)
+		var vx := (1.0 if randf() < 0.5 else -1.0) * randf_range(0.3, 1.0) * speed
+		var vy := -randf_range(0.4, 0.9) * speed
+		particles.append({"position": center, "velocity": Vector2(vx, vy),
+			"life": randf_range(0.35, 0.6), "coin": false, "tint": tint,
+			"spin": randf_range(0.0, TAU), "spin_speed": randf_range(3.0, 7.0)})
+
 
 func text_at(value: String, pos: Vector2, size: int, color := Color("#f4e0b8")) -> void:
 	draw_string(font, pos, value, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
@@ -3748,21 +3771,27 @@ func draw_shadow_fist(grip: Vector2, angle: float) -> void:
 
 ## 卡片外壳：投影 + 描边 + 顶部卡头条（标题在卡内，不再浮在卡片上方）
 func card_shell(title: String, accent: Color) -> void:
-	panel(Rect2(CARD_RECT.position + Vector2(1, 7), CARD_RECT.size + Vector2(12, 12)), Color(0.02, 0.05, 0.05, 0.5), 24) # 投影
-	panel(CARD_RECT, accent.darkened(0.6), 22) # 外框（描边感）
-	var inner := CARD_RECT.grow(-4)
-	panel(inner, Color("#15212c"), 19) # 卡面
-	panel(Rect2(inner.position.x, inner.position.y, inner.size.x, 48), accent.darkened(0.32), 19) # 卡头
-	draw_line(Vector2(inner.position.x, inner.position.y + 48), Vector2(inner.end.x, inner.position.y + 48), accent.lightened(0.15), 3)
-	text_center(title, CARD_RECT.get_center().x, inner.position.y + 36, 25, accent.lightened(0.3))
+	panel(Rect2(CARD_RECT.position + Vector2(2, 9), CARD_RECT.size + Vector2(14, 14)), Color(0.05, 0.03, 0.01, 0.55), 22) # 投影
+	panel(Rect2(CARD_RECT.position + Vector2(-3, -3), CARD_RECT.size + Vector2(6, 6)), Color("#3a2412"), 20) # 深棕做旧描边
+	var inner := CARD_RECT.grow(-5)
+	panel(inner, Color("#e6d3a3"), 16) # 牛皮纸卡面（做旧）
+	panel(inner.grow(-7), Color("#efe0bd"), 13) # 内圈亮纸边
+	draw_rect(inner.grow(-7), Color("#8a2f24"), false, 2.0) # 复古红细描边
+	panel(Rect2(inner.position.x + 7, inner.position.y + 7, inner.size.x - 14, 44), Color("#8a2f24"), 10) # 复古红标题带
+	text_center(title, CARD_RECT.get_center().x, inner.position.y + 37, 24, Color("#f7e8c8"))
+	text_at('♠', inner.position + Vector2(13, 27), 18, Color("#2a2018")) # 四角花色
+	text_at('♥', Vector2(inner.end.x - 29, inner.position.y + 27), 18, Color("#8a2f24"))
+	text_at('♥', Vector2(inner.position.x + 13, inner.end.y - 12), 18, Color("#8a2f24"))
+	text_at('♠', Vector2(inner.end.x - 29, inner.end.y - 12), 18, Color("#2a2018"))
 
 
 ## 卡片中间的圆形徽章，放主数字（金额 / ×2），比纯文字更醒目
 func card_badge(accent: Color, value: String, size: int) -> void:
 	var c := Vector2(CARD_RECT.get_center().x, CARD_RECT.position.y + 110)
-	draw_circle(c, 48, accent.darkened(0.5))
-	draw_circle(c, 42, accent.darkened(0.18))
-	draw_arc(c, 42, 0.0, TAU, 32, accent.lightened(0.25), 3)
+	draw_circle(c, 48, Color("#7a4f18")) # 复古金徽章
+	draw_circle(c, 42, Color("#c9973f"))
+	draw_arc(c, 42, 0.0, TAU, 32, Color("#f0c96a"), 3)
+	draw_arc(c, 35, 0.0, TAU, 32, Color("#8a5a1a"), 1.5)
 	text_center(value, c.x, c.y + size * 0.36, size, Color("#fff6e2"))
 
 

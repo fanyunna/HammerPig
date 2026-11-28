@@ -41,6 +41,7 @@ const LIST := {
     "card": 0.26,       # 翻牌：纸张
     "click": 0.06,      # UI 点击：极轻的一声
     "round_end": 0.80,  # 一轮结束：合成兜底（有录音时走 REAL_SFX）
+    "sub": 0.55,        # 低频冲击：破猪砸出的咚，让画面跟着震
 }
 
 var muted := false
@@ -218,3 +219,7 @@ func _build(name: String, buf: PackedFloat32Array) -> void:
             _noise(buf, 0.10, 0.45, 0.36, 11.0, 0.11)
         "click": # UI：短到几乎只是一个"搭"
             _tone(buf, 1500.0, 1150.0, 0.05, 1, 0.28, 20.0)
+        "sub": # 低频冲击：52Hz 坠到 28Hz 的咚
+            _tone(buf, 52.0, 28.0, 0.50, 0, 0.9, 3.5)
+            _tone(buf, 104.0, 56.0, 0.30, 1, 0.35, 4.5)
+            _noise(buf, 0.18, 0.05, 0.4, 5.0, 0.0)
