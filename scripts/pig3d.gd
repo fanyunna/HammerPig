@@ -3,22 +3,14 @@ class_name Pig3D
 
 ## 程序化生成的 3D 小猪存钱罐：一个 SubViewport 装一只，main.gd 的 _draw() 把纹理贴到 pig.position。
 ## 本机没有 Blender，也没有外部 .glb，全部用 Godot 内置图元（球体 / 圆柱 / 方块 / 圆环）拼装。
-## 造型要点：复古脏粉釉面存钱罐 —— 旧陶瓷/瓷釉玩具质感，哑光带一点釉面反光，
-## 黑线五官磨损，掉漆处露浅米白陶底，细小划痕与旧玩具磕碰痕迹。
+## 造型要点：陶瓷釉面材质（clearcoat）、圆胖罐体、顶部投币口 + 露出的金币、短鼻小耳短腿、卷尾巴。
 ## headless 下渲染驱动是 dummy（纹理无像素），main.gd 会自动回退 2D 自绘，不影响冒烟测试。
 
 ## 纹理分辨率。小猪在屏幕上约 92px；192px 视口让鼻孔、眼睛和陶瓷高光缩放后仍清楚。
 ## 24 只 × 192² 约 0.88M 像素/帧，保持在可控范围内。
 const VIEW_SIZE := 192
 
-## 相机俯角（弧度）。桌面 desk3d 与猪必须用同一档，否则猪会像立在桌面上。
-## 调试时截图脚本可改 pig3d.cam_pitch_override 一次跑多个角度对照。
-const CAM_PITCH := 1.012 # 58°：比桌面 60° 浅 3°，猪略微"立"一点才有立体感（原版观感）
-const CAM_DIST := 4.949 # 相机到目标点的距离
-static var cam_pitch_override := 0.0
-
 var _root3d: Node3D
-var _cam: Camera3D # 调试时可运行时改俯角（对照桌面角度）
 var _body: MeshInstance3D
 var _body_mat: StandardMaterial3D
 var _accent_mat: StandardMaterial3D # 鼻 / 耳 / 腿 / 尾：整体换色时一起换，否则会出现粉鼻金身
@@ -30,8 +22,7 @@ var _hat: Node3D # 西部牛仔帽（pig_types 里 "hat": true 才显示）
 var _bandana: Node3D # 红三角巾（"bandana": true）
 var _star: Node3D # 胸前警长星（"star": true）
 var _body_base_scale := Vector3(1.13, 0.99, 1.04) # 轻微不对称，手工陶器不会是完美椭球
-static var _grain_tex: ImageTexture # 雕刻颗粒法线贴图（8 只猪共用一份）
-static var _pig_glaze_tex: ImageTexture # 旧陶瓷釉面+磨损掉漆贴图（全部猪共用一份）
+static var _grain_tex: ImageTexture # 釉面颗粒法线贴图（8 只猪共用一份）
 var _base_color := Color("#f7c2bf") # 陶瓷粉
 var _hurt_color := Color("#d98f95") # 裂了以后暗一号
 
@@ -48,9 +39,7 @@ func _build_scene() -> void:
 	var cam := Camera3D.new()
 	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
 	cam.size = 2.9
-	_cam = cam
-	var pitch := cam_pitch_override if cam_pitch_override > 0.0 else CAM_PITCH
-	cam.position = Vector3(0.0, CAM_DIST * sin(pitch), CAM_DIST * cos(pitch))
+	cam.position = Vector3(0.0, 4.7, 3.0) # 约 58° 俯视：从玩家敲击方向看见猪背、鼻子和投币口
 	cam.look_at_from_position(cam.position, Vector3(0.0, 0.08, 0.0))
 	cam.current = true
 	add_child(cam)
@@ -72,14 +61,6 @@ func _build_scene() -> void:
 	_root3d.position = Vector3(0.0, -0.05, 0.0)
 	add_child(_root3d)
 	_build_bank(_root3d)
-
-
-## 运行时改俯角：截图脚本用它把猪和桌面拉到同一档角度做对照
-func set_cam_pitch(pitch: float) -> void:
-	if _cam == null:
-		return
-	_cam.position = Vector3(0.0, CAM_DIST * sin(pitch), CAM_DIST * cos(pitch))
-	_cam.look_at_from_position(_cam.position, Vector3(0.0, 0.08, 0.0))
 
 
 ## 釉面颗粒：用 simplex 噪声的梯度现场算一张法线贴图，让表面不再是完美光滑的塑料感
@@ -153,90 +134,6 @@ func _stripe_texture(base: Color, stripe: Color) -> ImageTexture:
 	return tex
 
 
-## 旧陶瓷釉面存钱罐贴图：脏粉釉底（近白偏暖灰，乘上猪本色=灰脏粉）+ 灰尘油渍污痕
-## + 细小划痕磕碰，掉漆处露出浅米白陶底。釉面烘成近白：乘上 albedo_color 后釉面=脏粉釉。
-func _glaze_pig_texture() -> ImageTexture:
-	if _pig_glaze_tex != null:
-		return _pig_glaze_tex
-	var size := 256
-	var img := Image.create(size, size, false, Image.FORMAT_RGB8)
-	var clay_dark := Color("#e8dbc9") # 掉漆露出的陶底：浅米白偏陶土色
-	var clay_light := Color("#f4ebdf")
-	var glaze := Color(0.95, 0.90, 0.89) # 釉底：近白偏暖灰，乘上猪本色就是脏粉而不是艳粉
-	var n_stain := FastNoiseLite.new() # 灰尘/油渍：低频大块污痕
-	n_stain.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	n_stain.frequency = 0.045
-	var n_mottle := FastNoiseLite.new() # 釉面中频色斑：陶土底色的轻微不均匀
-	n_mottle.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	n_mottle.frequency = 0.11
-	var n_chip := FastNoiseLite.new() # 掉漆：极低频，全图只有 2~3 块
-	n_chip.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	n_chip.frequency = 0.022
-	var n_edge := FastNoiseLite.new()
-	n_edge.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	n_edge.frequency = 0.5
-	for y in range(size):
-		for x in range(size):
-			# 陶底：轻微陶土色斑，只在掉漆处可见
-			var mb := n_mottle.get_noise_2d(float(x), float(y)) * 0.5 + 0.5
-			var c := clay_dark.lerp(clay_light, mb)
-			# 完整釉面为底（约九成面积），掉漆只在少数磨损大块露陶底：
-			# 过渡带窄（近乎二值），釉面干净、掉漆边缘参差不齐。
-			var pm := n_chip.get_noise_2d(float(x), float(y)) + n_edge.get_noise_2d(float(x), float(y)) * 0.15
-			var glaze_cover := clampf((pm + 0.26) * 6.5, 0.0, 1.0)
-			c = c.lerp(glaze, glaze_cover)
-			# 灰尘油渍：低频暖灰污痕，轻微压暗（旧道具的陈旧感，不是黑泥）
-			var st := n_stain.get_noise_2d(float(x) * 0.8, float(y))
-			if st > 0.12:
-				c = c.darkened(clampf((st - 0.12) * 0.24, 0.0, 0.15))
-			img.set_pixel(x, y, c)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 20
-	# 细小划痕：短、浅，旧存钱罐的正常磨损
-	for i in range(34):
-		var px := rng.randf_range(0.0, float(size))
-		var py := rng.randf_range(0.0, float(size))
-		var ang := rng.randf_range(-0.5, 0.5) + (PI * 0.5 if rng.randf() < 0.5 else 0.0)
-		var ln := rng.randf_range(5.0, 22.0)
-		var shade := -0.05 if rng.randf() < 0.6 else 0.04
-		for s in range(int(ln)):
-			var xx := posmod(int(px + cos(ang) * float(s)), size)
-			var yy := posmod(int(py + sin(ang) * float(s)), size)
-			var pc := img.get_pixel(xx, yy)
-			img.set_pixel(xx, yy, Color(clampf(pc.r + shade, 0.0, 1.0), clampf(pc.g + shade, 0.0, 1.0), clampf(pc.b + shade, 0.0, 1.0)))
-	# 少量磕碰小凹点
-	for i in range(24):
-		var px2 := rng.randi_range(0, size - 2)
-		var py2 := rng.randi_range(0, size - 2)
-		var dd := rng.randf_range(0.03, 0.09)
-		for oy in range(2):
-			for ox in range(2):
-				img.set_pixel(px2 + ox, py2 + oy, img.get_pixel(px2 + ox, py2 + oy).darkened(dd))
-	_pig_glaze_tex = ImageTexture.create_from_image(img)
-	return _pig_glaze_tex
-
-
-## 复古脏粉釉面陶瓷材质：哑光为主、带一点柔和釉面反光（轻 clearcoat），无金属；
-## 釉色乘在贴图上（釉面近白=显脏粉釉色，掉漆处=显陶底色），叠轻微颗粒法线。
-func _glazed(color: Color, rough := 0.55, tex := true) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = color
-	m.metallic = 0.0
-	m.roughness = rough
-	m.metallic_specular = 0.3 # 釉面的柔和镜面反射（不是塑料那种亮面）
-	m.clearcoat = 0.25 # 一层薄釉：高光柔和不剛眼（负面项：釉面高光过强）
-	m.clearcoat_roughness = 0.6
-	m.rim = 0.08 # 轮廓补光，把猪从桌面背景里分离出来
-	m.rim_tint = 0.5
-	if tex:
-		m.albedo_texture = _glaze_pig_texture()
-		m.normal_enabled = true
-		m.normal_texture = _grain_texture()
-		m.normal_scale = 0.15 # 釉面轻微不均匀起伏，不是塑料的完美平滑
-	m.uv1_scale = Vector3.ONE
-	return m
-
-
 ## 罐子里攒的钱：一堆歪歪斜斜塞进去的硬币。只有玻璃罐会把它显示出来 —— 一眼看得见里面有货，
 ## 所以它最诱人；代价是它一锤就碎（碎得快，但你也留不住它）。
 func _build_inner_coins(parent: Node3D) -> Node3D:
@@ -272,17 +169,16 @@ func _part(parent: Node3D, mesh: Mesh, mat: StandardMaterial3D, pos: Vector3, sc
 
 
 func _build_bank(parent: Node3D) -> void:
-	_body_mat = _glazed(_base_color)
-	_accent_mat = _glazed(_hurt_color) # 鼻 / 耳 / 腿：同釉面陶件，整身换色时一起换
-	var dark := _glazed(Color("#5a4a42"), 0.7, false) # 蹄 / 尾：深暖灰陶件（不上釉贴图）
-	_eye_mat = _ceramic(Color("#332a21"), 0.3, false) # 眼珠：手绘黑釉点，轻微抛光
-	_blush_mat = _ceramic(Color("#e8a49e"), 0.55) # 腮红：褪色手绘粉漆
-	var slot_mat := _ceramic(Color("#4a3a30"), 0.7) # 投币口：刻刀凿出的深槽
-	var gold_mat := _ceramic(Color("#e0b552"), 0.4, false) # 金币：哑光黄铜（不动）
+	_body_mat = _ceramic(_base_color)
+	_accent_mat = _ceramic(_hurt_color) # 鼻 / 耳 / 腿 / 尾
+	var dark := _accent_mat
+	_eye_mat = _ceramic(Color("#2f2a29"), 0.15, false) # 眼珠光滑
+	_blush_mat = _ceramic(Color("#f2a0a4"), 0.3)
+	var slot_mat := _ceramic(Color("#5a4a48"), 0.55)
+	var gold_mat := _ceramic(Color("#e0b552"), 0.4, false) # 金币也别做成电镀的：哑光黄铜，靠颜色认出是钱
 	_inner = _build_inner_coins(parent) # 只有玻璃罐才把它打开
 
 	# 罐体：按参考图做成更矮、更宽的圆润存钱罐轮廓
-	# （用户明确要求：外形轮廓/体型一个顶点都不能动，只换材质）
 	var body_mesh := SphereMesh.new()
 	body_mesh.radius = 1.0
 	body_mesh.height = 1.72
@@ -305,7 +201,7 @@ func _build_bank(parent: Node3D) -> void:
 	_coin = _part(parent, coin_mesh, gold_mat, Vector3(0.02, 1.03, 0.1)) # 催债猪要把它藏起来：它不是存钱罐
 	_coin.rotation = Vector3(PI / 2.0, 0.0, 0.26)
 
-	# 猪鼻：宽圆木鼻盘，朝向镜头；两枚深色鼻孔用木珠点表现
+	# 猪鼻：宽圆鼻盘，朝向镜头；两枚深色鼻孔用椭圆陶瓷点表现
 	var snout_mesh := SphereMesh.new()
 	snout_mesh.radius = 0.34
 	snout_mesh.height = 0.40
@@ -353,7 +249,7 @@ func _build_bank(parent: Node3D) -> void:
 		hoof_mesh.height = 0.14
 		_part(parent, hoof_mesh, dark, Vector3(sx, -0.79, sz + 0.015), Vector3(0.94, 0.55, 0.9))
 
-	# 眼睛：抛光木珠 + 一点高光白
+	# 眼睛：釉面黑点 + 一点高光白
 	for i in range(2):
 		var side := -1.0 if i == 0 else 1.0
 		var eye_mesh := SphereMesh.new()
@@ -366,7 +262,7 @@ func _build_bank(parent: Node3D) -> void:
 		var glint := _ceramic(Color.WHITE, 0.05, false)
 		_part(parent, gl_mesh, glint, Vector3(0.37 * side, 0.29, 0.95))
 
-	# 腮红：两片贴在脸颊上的手绘粉漆（旧玩具漆色褪了一档），强化“猪”的辨识
+	# 腮红：两片贴在脸颊上的粉，强化"猪"的辨识
 	for i in range(2):
 		var side := -1.0 if i == 0 else 1.0
 		var blush_mesh := SphereMesh.new()
@@ -463,7 +359,7 @@ func _build_western(parent: Node3D) -> void:
 		spike.rotation.z = a - PI / 2.0 # 锥轴从 +y 转到该角的方向
 
 ## 换一身皮：猪重生时会换种类，重建整只太贵（还要重新生成网格），这里只改材质与整体缩放。
-## t 是 balance.json 里 pig_types 的一项（空字典 = 用默认的脏粉釉面陶猪）。
+## t 是 balance.json 里 pig_types 的一项（空字典 = 用默认的陶瓷粉小猪）。
 func apply_type(t: Dictionary) -> void:
 	var id := String(t.get("id", "piggy"))
 	_base_color = _color(t, "color", "#f7c2bf")
@@ -472,7 +368,7 @@ func apply_type(t: Dictionary) -> void:
 	_base_color.a = float(t.get("alpha", 0.42)) if bool(t.get("glass", false)) else 1.0
 	_hurt_color = _base_color.darkened(0.28)
 	_body_mat.albedo_color = _base_color
-	_body_mat.roughness = float(t.get("rough", 0.55))
+	_body_mat.roughness = float(t.get("rough", 0.62))
 	_accent_mat.albedo_color = _color(t, "accent", "#e79aa0")
 	_eye_mat.albedo_color = _color(t, "eye", "#2f2a29")
 	_blush_mat.albedo_color = _color(t, "blush", "#f2a0a4")
@@ -482,18 +378,16 @@ func apply_type(t: Dictionary) -> void:
 		_body_mat.albedo_texture = _stripe_texture(_base_color, _color(t, "stripe", "#4f7d8c"))
 		_body_mat.uv1_scale = Vector3(3.0, 1.2, 1.2) # 横向拉密一点才是条纹，不是色块
 	else:
-		_body_mat.albedo_texture = _glaze_pig_texture() # 默认：旧陶瓷釉面+磨损掉漆
-		_body_mat.uv1_scale = Vector3.ONE
+		_body_mat.albedo_texture = null
+		_body_mat.uv1_scale = Vector3(2.0, 2.0, 2.0)
 
 	if bool(t.get("glass", false)):
 		_glassify(_body_mat, float(t.get("alpha", 0.42)))
 	else:
 		_body_mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
 		_body_mat.albedo_color.a = 1.0
-		_body_mat.metallic_specular = 0.3
-		_body_mat.clearcoat = 0.25
-		_body_mat.clearcoat_roughness = 0.6
-		_body_mat.rim = 0.08
+		_body_mat.metallic_specular = 0.16
+		_body_mat.rim = 0.07
 	if _inner != null:
 		_inner.visible = bool(t.get("glass", false))
 	if _coin != null:

@@ -213,8 +213,7 @@ var stamina_flash := 0.0
 var end_reason := "" # "target" / "exhausted"
 var font: Font = SystemFont.new() # Font 基类：可换成 FontFile 加载得意黑
 
-var pig_tex: Dictionary = {} # 猪贴图：id → Texture2D。桌面猪已全部改走 3D 实时渲染，
-# 贴图只保留给序幕封面等 UI 用（draw_cover_texture(pig_tex["piggy"])）
+var pig_tex: Dictionary = {} # 猪贴图：id → Texture2D（缺的键 = 素材还没生成，静默回退原路径）
 var hammer_tex: Texture2D = null # 握锤的手贴图；null = 用回 3D 锤
 var bg_tex: Texture2D = null # 西部酒馆背景；null = 用回纯色底
 var pig3d: Array[Pig3D] = [] # 每只猪一个 SubViewport（3D）
@@ -3362,14 +3361,18 @@ func _tutorial_banner(label: String, alpha := 1.0) -> void:
 
 
 func _draw() -> void:
-	if bg_tex != null: # 西部酒馆全景：拉伸铺满，再压一层暗保持 HUD 可读
-		draw_texture_rect(bg_tex, Rect2(0, 0, 1280, 800), false)
-		draw_rect(Rect2(0, 0, 1280, 800), Color(0.0, 0.0, 0.0, 0.35))
+	# 视角跟随：背景视差跟随手部微移，制造纵深
+	var _cam_parallax := -(hammer_position - Vector2(640.0, 400.0)) * 0.035
+	draw_set_transform(_cam_parallax, 0.0, Vector2.ONE)
+	if bg_tex != null: # 西部酒馆全景：多画一圈边距，视差偏移时不露边
+		draw_texture_rect(bg_tex, Rect2(-40.0, -40.0, 1360.0, 880.0), false)
+		draw_rect(Rect2(-40.0, -40.0, 1360.0, 880.0), Color(0.0, 0.0, 0.0, 0.35))
 	else:
 		draw_rect(Rect2(0, 0, 1280, 800), Color("#241610")) # 背景图没读到时用回纯色底
 		draw_circle(Vector2(1050, 180), 380, Color("#312012"))
 	draw_watchers() # 桌后那排黑影：画在桌子之前，才像"站在你身后看着"
 	draw_desk() # 桌面先铺，后面的 HUD / 猪 / 卡片都在它上面
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE) # 背景层结束，恢复默认变换
 	if intro_open:
 		draw_intro()
 		if shop_open:
@@ -3505,8 +3508,11 @@ func _draw() -> void:
 func draw_pig(pig: Dictionary, index: int) -> void:
 	if bool(pig.get("wheel_gold", false)):
 		_draw_gold_aura(pig) # 金猪的自发光光晕画在身后，和普通猪一眼区分
-	# 全部猪走 3D 实时渲染（不再按 pig_tex 优先走贴图）：材质改动即时生效，
-	# 猪种体型缩放由 apply_type 里的 _root3d.scale 负责，与贴图路线观感一致。
+	var t: Dictionary = pig.get("type", {})
+	var tex: Texture2D = pig_tex.get(String(t.get("id", "piggy")))
+	if tex != null: # 有贴图走贴图：AI 素材替掉图元 3D 模型
+		draw_pig_sprite(pig, tex)
+		return
 	if use_3d and index < pig3d.size():
 		var s := pig_size() / 190.0 # 阴影 / 裂纹 / 抖动幅度都按绘制尺寸等比缩放
 		var pos: Vector2 = pig.position + PIG3D_OFFSET
@@ -3538,6 +3544,49 @@ func draw_pig(pig: Dictionary, index: int) -> void:
 		return
 	draw_pig_flat(pig)
 
+
+## 贴图猪（AI 西部素材）：移动时按 hop_phase 正弦弹跳 —— 视觉上移 = -abs(sin) × 跳高，
+## 落地瞬间（sin 过零点附近）短暂挤压（0.9 / 1.08），空中轻微拉伸（1.05）；
+## 被敲中的大跳（hop > 0）、受击抖动、死亡淡出都沿用原参数。
+func draw_pig_sprite(pig: Dictionary, tex: Texture2D) -> void:
+	var t: Dictionary = pig.get("type", {})
+	var side := pig_size() * pig_scale(t) # 贴图最长边的绘制长度：跟整体尺寸与猪种体型走
+	var k := side / PIG3D_SIZE # 阴影 / 裂纹 / 抖动幅度按绘制尺寸等比缩放（沿用原 3D 路径）
+	var pos: Vector2 = pig.position + PIG3D_OFFSET
+	if pig.flash > 0.0:
+		pos.x += sin(pig.flash * 90) * 8 * k
+	var squash := Vector2.ONE
+	if pig.hp > 0:
+		var spd: float = pig.velocity.length()
+		var bounce := absf(sin(float(pig.get("hop_phase", 0.0))))
+		var hop_h := lerpf(14.0, 20.0, clampf(spd / 160.0, 0.0, 1.0)) # 快猪跳高一点
+		pos.y -= bounce * hop_h * k
+		if bounce < 0.25: # 落地瞬间：短暂挤压
+			squash = Vector2(1.08, 0.9)
+		else: # 空中：轻微拉伸
+			squash = Vector2(1.0, 1.0 + 0.05 * bounce)
+	if pig.hop > 0.0:
+		pos.y -= sin(pig.hop / 0.24 * PI) * 26 * k # 受击向上跳起（大跳，沿用原参数）
+	draw_set_transform(pig.position + Vector2(0, 43 * k), 0, Vector2(1, 0.25))
+	draw_circle(Vector2.ZERO, 62 * k, Color(0.12, 0.1, 0.08, 0.27)) # 桌面投影：画在脚下，不跟着跳
+	draw_set_transform(Vector2.ZERO)
+	var ts := tex.get_size()
+	var fit := side / maxf(ts.x, ts.y) # 最长边对齐 side，等比缩放，不拉坏素材比例
+	var flip := 1.0 if bool(pig.get("left", true)) else -1.0 # 素材朝左画；往右走时镜像
+	if pig.flash > 0.0:
+		var compression := sin(clampf(float(pig.flash) / 0.14, 0.0, 1.0) * PI)
+		squash *= Vector2(1.0 + 0.34 * compression, 1.0 - 0.38 * compression)
+	pos.y += (1.0 - squash.y) * side * 0.5 # 以脚为轴挤压：中心下移，脚底保持贴地
+	draw_set_transform(pos, 0.0, Vector2(flip * squash.x * fit, squash.y * fit))
+	draw_texture(tex, -ts / 2.0)
+	draw_set_transform(Vector2.ZERO)
+	var dmg: int = int(pig.get("max_hp", 2)) - int(pig.hp) # 挨了几锤就画几道裂：金猪能裂两道
+	if dmg >= 1:
+		draw_set_transform(pos, 0.0, Vector2(flip * k, k))
+		draw_polyline(PackedVector2Array([Vector2(-26, -22), Vector2(-13, -9), Vector2(-23, 5), Vector2(-7, 23)]), Color("#985f69"), 3, true)
+		if dmg >= 2:
+			draw_polyline(PackedVector2Array([Vector2(20, -30), Vector2(8, -14), Vector2(22, -2), Vector2(11, 22)]), Color("#985f69"), 3, true)
+		draw_set_transform(Vector2.ZERO)
 
 ## 2D 回退版（headless / pig_3d: false）：形状照旧，但颜色与大小跟着种类走
 func draw_pig_flat(pig: Dictionary) -> void:

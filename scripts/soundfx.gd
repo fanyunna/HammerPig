@@ -1,8 +1,6 @@
 extends Node
 
-## 程序化音效 + 真实素材双层：assets/sfx/ 下的录音优先，没有录音的声音在这里现合成 buffer（AudioStreamWav）。
-## 为什么保留合成：合成配方是跟着手感调出来的（见 _build 注释），录音覆盖不到的音效依然要能响。
-## 录音来自梅泽伟的 main 分支（break/card/coin/crit/hit/round_end/swing），语义映射见 REAL_SFX。
+## 程序化音效：项目里只有 assets/hit.wav 一个素材，其余声音全部在这里现合成 buffer（AudioStreamWav）。
 ## 为什么这么做：这个项目的风格就是"能用代码生成的就别放素材"（看 desk3d.gd 的绒面贴图），
 ## 音效同理 —— 不用去找音频资源，改参数就能调手感。
 
@@ -12,18 +10,6 @@ extends Node
 ## 用法：Sound.play("pop")；单个音想变调就 Sound.play("cash", 1.2)。"crack" 例外 —— 走素材 hit.wav。
 
 const RATE := 44100
-
-## 真实素材优先表：合成配方照样保留，这张表里有录音的音就改用录音。
-## 录音自带混响和层次，比合成更厚；按语义映射，不逐个改调用点。
-const REAL_SFX := {
-    "pop": "res://assets/sfx/break.wav",   # 猪碎：真实碎裂录音
-    "cash": "res://assets/sfx/coin.wav",   # 进账：真实金币声
-    "card": "res://assets/sfx/card.wav",   # 翻牌：真实纸张声
-    "crit": "res://assets/sfx/crit.wav",   # 狂热：真实爆发声
-    "miss": "res://assets/sfx/swing.wav",  # 挥空：真实挥锤风声
-    "round_end": "res://assets/sfx/round_end.wav", # 一轮结束
-}
-
 const LIST := {
     "miss": 0.16,       # 挥空：一道风
     "pop": 0.34,        # 猪碎：闷响 + 碎裂
@@ -40,8 +26,8 @@ const LIST := {
     "crit": 0.50,       # 狂热连击：更尖更亮的上行琶音
     "card": 0.26,       # 翻牌：纸张
     "click": 0.06,      # UI 点击：极轻的一声
-    "round_end": 0.80,  # 一轮结束：合成兜底（有录音时走 REAL_SFX）
     "sub": 0.55,        # 低频冲击：破猪砸出的咚，让画面跟着震
+    "round_end": 0.80,  # 一轮结束：下行收尾
 }
 
 var muted := false
@@ -89,10 +75,6 @@ func toggle() -> bool:
 func _make(name: String) -> AudioStream:
     if _cache.has(name):
         return _cache[name]
-    if REAL_SFX.has(name): # 有录音的音优先用录音
-        var real: AudioStream = load(REAL_SFX[name])
-        _cache[name] = real
-        return real
     if name == "crack": # 保留原有素材：这一声的手感已经调好了
         var wav: AudioStream = load("res://assets/hit.wav")
         _cache["crack"] = wav
@@ -219,7 +201,10 @@ func _build(name: String, buf: PackedFloat32Array) -> void:
             _noise(buf, 0.10, 0.45, 0.36, 11.0, 0.11)
         "click": # UI：短到几乎只是一个"搭"
             _tone(buf, 1500.0, 1150.0, 0.05, 1, 0.28, 20.0)
-        "sub": # 低频冲击：52Hz 坠到 28Hz 的咚
+        "sub": # 低频冲击：52Hz 坠到 28Hz 的咚，配合破猪画面震动
             _tone(buf, 52.0, 28.0, 0.50, 0, 0.9, 3.5)
             _tone(buf, 104.0, 56.0, 0.30, 1, 0.35, 4.5)
             _noise(buf, 0.18, 0.05, 0.4, 5.0, 0.0)
+        "round_end": # 一轮结束：下行收尾，给这局一个落点
+            _tone(buf, 392.0, 196.0, 0.6, 1, 0.4, 2.5)
+            _tone(buf, 196.0, 98.0, 0.5, 1, 0.3, 2.0, 0.3)
